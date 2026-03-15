@@ -36,8 +36,7 @@ def tensor_meta(val: Any) -> dict[str, Any] | None:
     return None
 
 
-# Targets considered "plumbing" — reshape/index/alias without real compute.
-# Mirrors _VIEW_TARGETS in op_dump.py.
+# Plumbing ops — reshape/index/alias without real compute.  Mirrors op_dump._VIEW_TARGETS.
 _VIEW_TARGETS = frozenset({
     "view", "reshape", "permute", "transpose", "expand", "contiguous",
     "unsqueeze", "squeeze", "slice", "select", "split", "unbind", "chunk",
@@ -47,42 +46,29 @@ _VIEW_TARGETS = frozenset({
 
 
 def _is_view_node(node: Node) -> bool:
-    """Return True if *node* is a view/reshape/index plumbing op."""
     if node.op not in ("call_function", "call_method"):
         return False
-    target = callable_to_str(node.target) if node.op == "call_function" else str(node.target)
-    # callable_to_str returns e.g. "aten.t", "aten.squeeze.dim", "operator.getitem"
-    parts = target.lower().split(".")
-    # For "aten.<op>" or "aten.<op>.<overload>", the op name is parts[1].
-    # For "operator.getitem", it's parts[-1].
-    if len(parts) >= 2 and parts[0] == "aten":
-        op_name = parts[1]
-    else:
-        op_name = parts[-1]
+    # callable_to_str → "aten.t", "aten.squeeze.dim", "operator.getitem"
+    parts = callable_to_str(node.target).lower().split(".")
+    op_name = parts[1] if len(parts) >= 2 and parts[0] == "aten" else parts[-1]
     return op_name in _VIEW_TARGETS
 
 
 def _stride_comment(node: Node) -> str:
-    """Return a trailing comment with strides, contiguity, and view flag."""
+    """Trailing comment: strides, contiguity, and view flag for output tensors."""
     val = node.meta.get("val")
     view = _is_view_node(node)
 
+    def _fmt(t: torch.Tensor) -> str:
+        return f"strides={tuple(t.stride())}, contiguous={t.is_contiguous()}"
+
     if isinstance(val, torch.Tensor):
-        strides = tuple(val.stride())
-        contig = val.is_contiguous()
-        return f"  # strides={strides}, contiguous={contig}, view={view}"
+        return f"  # {_fmt(val)}, view={view}"
     if isinstance(val, (tuple, list)):
-        parts = []
-        for i, v in enumerate(val):
-            if isinstance(v, torch.Tensor):
-                strides = tuple(v.stride())
-                contig = v.is_contiguous()
-                parts.append(f"out{i}: strides={strides}, contiguous={contig}")
+        parts = [f"out{i}: {_fmt(v)}" for i, v in enumerate(val) if isinstance(v, torch.Tensor)]
         if parts:
             return "  # " + "; ".join(parts) + f", view={view}"
-    if view:
-        return f"  # view={view}"
-    return ""
+    return f"  # view={view}" if view else ""
 
 
 def placeholder_annotation(node: Node) -> str:

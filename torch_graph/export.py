@@ -2127,14 +2127,9 @@ def export_graph_to_python(
                         for hl in header_lines:
                             buf.write(f"    # {hl}\n")
 
-        stride_cmt = ir_node.get("stride_comment", "")
-        parts = line.split("\n")
-        for i, sub in enumerate(parts):
-            # Append stride comment to the last line of this op
-            if i == len(parts) - 1 and stride_cmt:
-                buf.write(f"    {sub}{stride_cmt}\n")
-            else:
-                buf.write(f"    {sub}\n")
+        line += ir_node.get("stride_comment", "")
+        for sub in line.split("\n"):
+            buf.write(f"    {sub}\n")
 
     return_line = _ir_return_to_python(ir_graph["returns"])
     if _remap_re is not None:

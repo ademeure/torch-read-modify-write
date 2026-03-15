@@ -18,6 +18,7 @@ GPT, GPTConfig, MuonAdamW etc. without running a 5-minute training session.
 from __future__ import annotations
 
 import ast
+import os
 import subprocess
 import sys
 import types
@@ -27,6 +28,8 @@ import torch
 
 _REPO_DIR = Path(__file__).resolve().parent.parent / "outputs" / "repos" / "autoresearch"
 _train_ns: dict | None = None  # cached namespace from partial exec of train.py
+_train_backend: str | None = None
+_FLASH_BACKEND_ENV = "AUTORESEARCH_FLASH_BACKEND"
 
 
 # ── Helpers ───────────────────────────────────────────────────────────
@@ -42,14 +45,33 @@ def _ensure_repo():
         )
 
 
-def _init():
+def _normalize_flash_backend(flash_backend: str | None) -> str:
+    if flash_backend is None:
+        return "auto"
+    backend = flash_backend.strip().lower()
+    if backend == "native":
+        return "auto"
+    if backend not in {"auto", "fa4", "fa3", "sdpa"}:
+        raise ValueError(
+            f"Unsupported flash_backend={flash_backend!r}; expected auto, fa4, fa3, or sdpa"
+        )
+    return backend
+
+
+def _init(flash_backend: str = "auto"):
     """Ensure repo is cloned and autoresearch is on sys.path."""
+    backend = _normalize_flash_backend(flash_backend)
     _ensure_repo()
     if str(_REPO_DIR) not in sys.path:
         sys.path.insert(0, str(_REPO_DIR))
+    if backend == "auto":
+        os.environ.pop(_FLASH_BACKEND_ENV, None)
+    else:
+        os.environ[_FLASH_BACKEND_ENV] = backend
+    sys.modules.pop("flash_attention", None)
 
 
-def _load_train_module():
+def _load_train_module(flash_backend: str = "auto"):
     """Load autoresearch/train.py using AST surgery to skip the training loop.
 
     Parses train.py into an AST, keeps only:
@@ -61,11 +83,15 @@ def _load_train_module():
     Drops all bare expressions and statements that constitute the
     training loop (everything after the hyperparameter block).
     """
-    global _train_ns
-    if _train_ns is not None:
+    global _train_ns, _train_backend
+    backend = _normalize_flash_backend(flash_backend)
+    if _train_ns is not None and _train_backend == backend:
         return _train_ns
 
-    _init()
+    _train_ns = None
+    _train_backend = None
+
+    _init(backend)
     train_path = _REPO_DIR / "train.py"
     source = train_path.read_text()
     tree = ast.parse(source, str(train_path))
@@ -118,14 +144,15 @@ def _load_train_module():
     exec(code, mod.__dict__)
 
     _train_ns = mod.__dict__
+    _train_backend = backend
     return _train_ns
 
 
 def _build_model(depth: int = 4, aspect_ratio: int = 64, head_dim: int = 128,
                   seq_len: int = 64, window_pattern: str = "SSSL",
-                  device: str = "cuda"):
+                  device: str = "cuda", flash_backend: str = "auto"):
     """Build an autoresearch GPT model."""
-    ns = _load_train_module()
+    ns = _load_train_module(flash_backend=flash_backend)
     from prepare import Tokenizer
 
     GPT = ns["GPT"]
@@ -162,9 +189,9 @@ def _build_optimizer(model):
     return model.setup_optimizer()
 
 
-def _make_token_pool(tokenizer, seq_len, min_tokens=2048):
+def _make_token_pool(tokenizer, seq_len, min_tokens=2048, flash_backend: str = "auto"):
     """Build a token pool from real data via prepare.py's dataloader."""
-    _init()
+    _init(flash_backend)
     from prepare import make_dataloader
 
     loader = make_dataloader(tokenizer, 1, seq_len, "val")
@@ -178,14 +205,16 @@ def _make_token_pool(tokenizer, seq_len, min_tokens=2048):
 
 # ── Pre-training recipe ──────────────────────────────────────────────
 
-def setup(device="cuda") -> dict:
+def setup(device="cuda", flash_backend: str = "auto") -> dict:
     """Base pre-training: causal LM loss with MuonAdamW."""
-    model, config, tokenizer = _build_model(depth=4, seq_len=64, device=device)
+    model, config, tokenizer = _build_model(
+        depth=4, seq_len=64, device=device, flash_backend=flash_backend
+    )
     optimizer = _build_optimizer(model)
 
     batch_size = 2
     seq_len = 64
-    _token_pool = _make_token_pool(tokenizer, seq_len)
+    _token_pool = _make_token_pool(tokenizer, seq_len, flash_backend=flash_backend)
 
     def get_batch(step: int):
         torch.manual_seed(1337 + step)
@@ -208,15 +237,16 @@ def setup(device="cuda") -> dict:
     }
 
 
-def setup_small(device="cuda") -> dict:
+def setup_small(device="cuda", flash_backend: str = "auto") -> dict:
     """Small model (depth=2) for quick testing."""
     model, config, tokenizer = _build_model(depth=2, aspect_ratio=32,
                                              head_dim=64, seq_len=32,
                                              window_pattern="SL",
-                                             device=device)
+                                             device=device,
+                                             flash_backend=flash_backend)
     batch_size = 2
     seq_len = 32
-    _token_pool = _make_token_pool(tokenizer, seq_len)
+    _token_pool = _make_token_pool(tokenizer, seq_len, flash_backend=flash_backend)
 
     def get_batch(step: int):
         torch.manual_seed(1337 + step)
@@ -235,14 +265,16 @@ def setup_small(device="cuda") -> dict:
     }
 
 
-def setup_eval(device="cuda") -> dict:
+def setup_eval(device="cuda", flash_backend: str = "auto") -> dict:
     """Eval-only (no optimizer, no backward)."""
-    model, config, tokenizer = _build_model(depth=4, seq_len=64, device=device)
+    model, config, tokenizer = _build_model(
+        depth=4, seq_len=64, device=device, flash_backend=flash_backend
+    )
     model.eval()
 
     batch_size = 2
     seq_len = 64
-    _token_pool = _make_token_pool(tokenizer, seq_len)
+    _token_pool = _make_token_pool(tokenizer, seq_len, flash_backend=flash_backend)
 
     torch.manual_seed(42)
     pool_len = len(_token_pool)

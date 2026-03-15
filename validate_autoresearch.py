@@ -21,7 +21,7 @@ import torch_graph.auto_install as ai
 
 N_STEPS      = 20
 CORRUPT_STEPS = 5
-TOLERANCE    = 5e-3   # per-step bf16 accumulation budget
+TOLERANCE    = 6e-3   # per-step bf16 accumulation budget (SDPA needs slightly more headroom)
 
 
 # ── State reset ────────────────────────────────────────────────────────────
@@ -54,7 +54,7 @@ def _setup():
     ai.patch()
     from autoresearch_wrapper import setup_small
     try:
-        return setup_small(device="cuda")
+        return setup_small(device="cuda", flash_backend="sdpa")
     except AttributeError as e:
         if "flash_attn_interface" in str(e):
             print("ERROR: flash_attention module state corrupted — run in isolation")

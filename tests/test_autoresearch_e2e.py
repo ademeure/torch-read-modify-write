@@ -38,7 +38,7 @@ sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 import torch_graph.auto_install as ai
 
 N_STEPS = 20
-TOLERANCE = 5e-3  # bfloat16 + torch.compile vs captured aten inner fns
+TOLERANCE = 6e-3  # bfloat16 + torch.compile vs captured aten inner fns (SDPA needs slightly more headroom)
 
 
 # ── Helpers ──────────────────────────────────────────────────────────────
@@ -60,7 +60,7 @@ def _setup_autoresearch():
 
     from autoresearch_wrapper import setup_small
     try:
-        return setup_small(device="cuda")
+        return setup_small(device="cuda", flash_backend="sdpa")
     except AttributeError as e:
         if "flash_attn_interface" in str(e):
             pytest.skip(

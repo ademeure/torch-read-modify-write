@@ -357,13 +357,9 @@ def bench_compile_aten(recipe: dict, warmup: int, steps: int) -> dict:
             if n_saved >= 0:
                 expected_fw_len = n_mutations + num_real_outputs + n_saved
 
-    # Compile aten forward/backward with inductor.
-    # IMPORTANT: use the REAL torch.compile, not our auto_install patched version,
-    # otherwise the backward gets intercepted and wrapped in _CompiledFnProxy.
-    import torch_graph.auto_install as _ai
-    _real_compile = _ai._real_torch_compile or torch.compile
-    compiled_fw = _real_compile(orig_forward, dynamic=False)
-    compiled_bw = _real_compile(orig_backward, dynamic=False) if orig_backward else None
+    # Compile aten forward/backward with inductor
+    compiled_fw = torch.compile(orig_forward, dynamic=False)
+    compiled_bw = torch.compile(orig_backward, dynamic=False) if orig_backward else None
 
     class _CompiledAtenGraph(torch.autograd.Function):
         @staticmethod

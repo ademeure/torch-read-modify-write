@@ -9,12 +9,15 @@ Pipeline:
   3. Fuse: find maximal chains of elementwise ops on same-shaped data
   4. Codegen: emit fused CUDA kernel + Python wrapper
 
-Structural ops (view, transpose, permute, etc.) inside a fused region become
-index arithmetic in the kernel — the kernel reads/writes contiguous memory and
-computes strided source indices internally.
+Identity ops (alias, detach) inside a fused region are elided — they don't
+change memory layout so flat indexing is still valid.
+
+Layout-changing ops (view, transpose, permute, etc.) are fusion BARRIERS
+because they change tensor strides. After a transpose, flat in[i] indexing
+reads wrong elements. These ops break the fusion chain.
 
 Ops without CUDA support (mm, bmm, addmm, embedding, convolution, split, etc.)
-stay as PyTorch calls and act as fusion barriers.
+also stay as PyTorch calls and act as fusion barriers.
 """
 
 from __future__ import annotations
@@ -104,13 +107,26 @@ _ELEMENTWISE_EXPR: dict[str, tuple[int, str, str]] = {
     "tanh_backward": (2, "({in0} * (1.0f - {in1} * {in1}))", ""),
 }
 
-# Ops that are structural (reshape memory layout, no computation).
-# Inside a fused kernel, these become index math.
-_STRUCTURAL_OPS = {
+# Ops that are identity (same data, same layout, safe to elide in a fused kernel).
+# These don't change memory layout or strides — the output tensor's data_ptr and
+# strides are identical to the input's, so flat indexing is still valid.
+_IDENTITY_OPS = {
+    "alias", "detach",
+}
+
+# Ops that change memory layout (view, transpose, etc.).
+# These are fusion BARRIERS because after them the tensor may be non-contiguous,
+# and a downstream elementwise kernel doing flat in[i] indexing would read the
+# wrong elements. To fuse across these, we'd need to compute strided indices
+# inside the kernel (requires knowing shapes/strides at codegen time).
+_LAYOUT_OPS = {
     "view", "reshape", "_unsafe_view", "t", "transpose", "permute",
     "expand", "contiguous", "unsqueeze", "squeeze", "slice", "select",
-    "as_strided", "alias", "detach", "clone",
+    "as_strided", "clone",
 }
+
+# Combined structural set for classification
+_STRUCTURAL_OPS = _IDENTITY_OPS | _LAYOUT_OPS
 
 # Ops that are fusion barriers — can't be fused into CUDA kernels.
 _BARRIER_OPS = {
@@ -167,12 +183,29 @@ class OpNode:
         return self.op_name in _ELEMENTWISE_EXPR
 
     @property
+    def is_identity(self) -> bool:
+        """Identity ops (alias, detach) — safe to include in fusion groups."""
+        return self.op_name in _IDENTITY_OPS
+
+    @property
+    def is_layout(self) -> bool:
+        """Layout-changing ops (view, transpose, etc.) — fusion barriers."""
+        return self.op_name in _LAYOUT_OPS
+
+    @property
     def is_structural(self) -> bool:
         return self.op_name in _STRUCTURAL_OPS
 
     @property
     def is_barrier(self) -> bool:
         return self.op_name in _BARRIER_OPS
+
+    @property
+    def is_fusable(self) -> bool:
+        """Can this op be included in a fusion group?
+        Elementwise ops and identity ops (alias, detach) are fusable.
+        Layout ops (view, transpose, etc.) are NOT — they change strides."""
+        return self.is_elementwise or self.is_identity
 
     @property
     def is_special(self) -> bool:
@@ -338,7 +371,7 @@ def _find_fusion_groups(ops: list[OpNode], return_vars: set[str]) -> list[Fusion
                 result.append(op)
 
     for op in ops:
-        if op.is_elementwise or op.is_structural:
+        if op.is_fusable:
             current_chain.append(op)
         else:
             _flush_chain()
@@ -422,16 +455,15 @@ def _gen_fused_kernel(group: FusionGroup, kernel_name: str) -> str:
 
     # Process ops in order
     for op in group.ops:
-        if op.is_structural:
-            # Structural ops are identity in the fused kernel
-            # (we make tensors contiguous at the Python boundary)
+        if op.is_identity:
+            # Identity ops (alias, detach) — just forward the expression
             tensor_args = op.tensor_args
             if tensor_args:
                 src = tensor_args[0].name
                 if src in var_expr:
                     var_expr[op.output_var] = var_expr[src]
                 else:
-                    var_expr[op.output_var] = f"/* {op.op_name} */ 0.0f"
+                    var_expr[op.output_var] = f"/* missing {op.op_name} input */ 0.0f"
             else:
                 var_expr[op.output_var] = "0.0f"
             continue
@@ -462,13 +494,15 @@ def _gen_fused_kernel(group: FusionGroup, kernel_name: str) -> str:
                         subs[f"s{scalar_idx}"] = "-INFINITY"
                     else:
                         subs[f"s{scalar_idx}"] = f"{val}f"
-                    # For Scalar variant ops, the scalar acts as the second tensor input
-                    if op.has_scalar_variant and f"in{tensor_idx}" not in subs:
+                    # Scalar in position where template expects {inN}:
+                    # happens for Scalar variants AND Tensor variants with
+                    # a literal scalar arg (e.g. mul.Tensor(x, 0.25))
+                    if f"in{tensor_idx}" not in subs:
                         subs[f"in{tensor_idx}"] = subs[f"s{scalar_idx}"]
                         tensor_idx += 1
                 elif isinstance(val, int):
                     subs[f"s{scalar_idx}"] = f"{val}.0f"
-                    if op.has_scalar_variant and f"in{tensor_idx}" not in subs:
+                    if f"in{tensor_idx}" not in subs:
                         subs[f"in{tensor_idx}"] = f"{float(val)}f"
                         tensor_idx += 1
                 elif isinstance(val, (list, tuple)):
@@ -607,7 +641,8 @@ def analyze(source: str) -> dict:
             kernel_idx += 1
 
     n_elementwise = sum(1 for op in ops if op.is_elementwise)
-    n_structural = sum(1 for op in ops if op.is_structural)
+    n_identity = sum(1 for op in ops if op.is_identity)
+    n_layout = sum(1 for op in ops if op.is_layout)
     n_barrier = sum(1 for op in ops if op.is_barrier)
     n_special = sum(1 for op in ops if op.is_special)
     n_fused = sum(len(g.ops) for g, _, _ in kernels)
@@ -619,7 +654,8 @@ def analyze(source: str) -> dict:
         "stats": {
             "total_ops": len(ops),
             "elementwise": n_elementwise,
-            "structural": n_structural,
+            "identity": n_identity,
+            "layout": n_layout,
             "barrier": n_barrier,
             "special": n_special,
             "fusion_groups": len(kernels),
@@ -730,7 +766,8 @@ def print_analysis(source: str) -> None:
 
     print(f"Total ops: {stats['total_ops']}")
     print(f"  Elementwise (fusable): {stats['elementwise']}")
-    print(f"  Structural (passthrough): {stats['structural']}")
+    print(f"  Identity (alias/detach): {stats['identity']}")
+    print(f"  Layout (view/transpose/...): {stats['layout']}")
     print(f"  Barriers (unfusable): {stats['barrier']}")
     print(f"  Special (getitem etc.): {stats['special']}")
     print(f"  Fusion groups: {stats['fusion_groups']}")

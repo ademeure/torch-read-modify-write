@@ -163,6 +163,38 @@ def _capture_mlp(device="cpu", record_filter=None, record_real=True):
 
 # ── CPU tests ────────────────────────────────────────────────────────────────
 
+def _load_kbox_h5(h5_data_path, device="cpu"):
+    """Load a kbox .h5 data file, splitting inputs and expected outputs."""
+    from types import SimpleNamespace
+    _DTYPE_MAP = {
+        "torch.bfloat16": torch.bfloat16,
+        "torch.float16": torch.float16,
+    }
+    inputs = {}
+    expected = []
+    with h5py.File(h5_data_path, "r") as f:
+        all_keys = list(f.keys())
+        exp_keys = sorted(k for k in all_keys if k.startswith("expected"))
+        for k in exp_keys:
+            ds = f[k]
+            raw = ds[()]
+            val = torch.from_numpy(raw) if isinstance(raw, np.ndarray) else torch.tensor(raw)
+            td = ds.attrs.get("torch_dtype", "")
+            if td in _DTYPE_MAP:
+                val = val.to(_DTYPE_MAP[td])
+            expected.append(val.to(device))
+        for k in all_keys:
+            if not k.startswith("expected"):
+                ds = f[k]
+                raw = ds[()]
+                val = torch.from_numpy(raw) if isinstance(raw, np.ndarray) else torch.tensor(raw)
+                td = ds.attrs.get("torch_dtype", "")
+                if td in _DTYPE_MAP:
+                    val = val.to(_DTYPE_MAP[td])
+                inputs[k] = val.to(device)
+    return SimpleNamespace(**inputs), expected
+
+
 def test_kbox_group_scripts_cpu():
     """Generated kbox group scripts produce bit-identical results on CPU.
 
@@ -173,44 +205,48 @@ def test_kbox_group_scripts_cpu():
     with tempfile.NamedTemporaryFile(suffix=".h5", delete=False) as f:
         h5_path = f.name
     try:
-        dump_grouped_tensors(
-            capture, h5_path, group_by=["line"], which="both",
-            include_params=True, replay_scripts=True,
-        )
-        groups = list_groups(h5_path, section="forward", strategy="line")
-        assert len(groups) > 0
-
-        n_run = 0
-        for g in groups:
-            script = generate_group_script(h5_path, g)
-            # Force CPU for bit-identical comparison
-            script = script.replace(
-                '_device = "cuda" if torch.cuda.is_available() else "cpu"',
-                '_device = "cpu"',
+        with tempfile.TemporaryDirectory() as kbox_dir:
+            dump_grouped_tensors(
+                capture, h5_path, group_by=["line"], which="both",
+                include_params=True, replay_scripts=True,
             )
-            ns = {"__builtins__": __builtins__, "__file__": h5_path}
-            try:
-                exec(compile(script, f"<group_{g.index}>", "exec"), ns)
-            except Exception:
-                continue
-            run_fn, inp, exp = ns.get("run"), ns.get("input"), ns.get("expected")
-            if not (run_fn and inp and exp):
-                continue
-            try:
-                result = run_fn(inp)
-            except Exception:
-                continue
-            if result is None:
-                continue
-            for actual, expected in zip(result, exp):
-                if isinstance(actual, torch.Tensor) and isinstance(expected, torch.Tensor):
-                    assert torch.equal(actual, expected), (
-                        f"Group {g.name} mismatch: "
-                        f"max diff {(actual - expected).abs().max().item():.2e}"
-                    )
-                    n_run += 1
+            groups = list_groups(h5_path, section="forward", strategy="line")
+            assert len(groups) > 0
 
-        assert n_run > 0, "No group scripts produced validated results"
+            n_run = 0
+            for g in groups:
+                out_path = os.path.join(kbox_dir, f"test_{g.index}.py")
+                script = generate_group_script(h5_path, g, out_path=out_path)
+
+                # Find the .pt data file
+                ns = {"__builtins__": __builtins__}
+                exec(compile(script, f"<group_{g.index}>", "exec"), ns)
+                init_result = ns["init_once"]()
+                pt_rel = init_result["h5"]
+                pt_path = os.path.join(kbox_dir, pt_rel)
+
+                if not os.path.isfile(pt_path):
+                    continue
+
+                inputs, exp = _load_kbox_h5(pt_path, device="cpu")
+                if not exp:
+                    continue
+
+                try:
+                    result = ns["run"](inputs)
+                except Exception:
+                    continue
+                if result is None:
+                    continue
+                for actual, expected in zip(result, exp):
+                    if isinstance(actual, torch.Tensor) and isinstance(expected, torch.Tensor):
+                        assert torch.equal(actual, expected), (
+                            f"Group {g.name} mismatch: "
+                            f"max diff {(actual - expected).abs().max().item():.2e}"
+                        )
+                        n_run += 1
+
+            assert n_run > 0, "No group scripts produced validated results"
     finally:
         os.unlink(h5_path)
 
@@ -366,36 +402,43 @@ def test_kbox_group_scripts_gpu():
     with tempfile.NamedTemporaryFile(suffix=".h5", delete=False) as f:
         h5_path = f.name
     try:
-        dump_grouped_tensors(
-            capture, h5_path, group_by=["line"], which="both",
-            include_params=True, replay_scripts=True,
-        )
-        groups = list_groups(h5_path, section="forward", strategy="line")
+        with tempfile.TemporaryDirectory() as kbox_dir:
+            dump_grouped_tensors(
+                capture, h5_path, group_by=["line"], which="both",
+                include_params=True, replay_scripts=True,
+            )
+            groups = list_groups(h5_path, section="forward", strategy="line")
 
-        n_run = 0
-        for g in groups:
-            script = generate_group_script(h5_path, g)
-            ns = {"__builtins__": __builtins__, "__file__": h5_path}
-            try:
+            n_run = 0
+            for g in groups:
+                out_path = os.path.join(kbox_dir, f"test_{g.index}.py")
+                script = generate_group_script(h5_path, g, out_path=out_path)
+
+                ns = {"__builtins__": __builtins__}
                 exec(compile(script, f"<gpu_group_{g.index}>", "exec"), ns)
-            except Exception:
-                continue
-            run_fn, inp, exp = ns.get("run"), ns.get("input"), ns.get("expected")
-            if not (run_fn and inp and exp):
-                continue
-            try:
-                result = run_fn(inp)
-            except Exception:
-                continue
-            if result is None:
-                continue
-            for actual, expected in zip(result, exp):
-                if isinstance(actual, torch.Tensor) and isinstance(expected, torch.Tensor):
-                    _assert_outputs_match(actual, expected, exact=False,
-                                          msg=f"GPU group {g.name}: ")
-                    n_run += 1
+                init_result = ns["init_once"]()
+                pt_path = os.path.join(kbox_dir, init_result["h5"])
 
-        assert n_run > 0, "No GPU kbox scripts validated"
+                if not os.path.isfile(pt_path):
+                    continue
+
+                inputs, exp = _load_kbox_h5(pt_path, device="cuda")
+                if not exp:
+                    continue
+
+                try:
+                    result = ns["run"](inputs)
+                except Exception:
+                    continue
+                if result is None:
+                    continue
+                for actual, expected in zip(result, exp):
+                    if isinstance(actual, torch.Tensor) and isinstance(expected, torch.Tensor):
+                        _assert_outputs_match(actual, expected, exact=False,
+                                              msg=f"GPU group {g.name}: ")
+                        n_run += 1
+
+            assert n_run > 0, "No GPU kbox scripts validated"
     finally:
         os.unlink(h5_path)
 
@@ -518,43 +561,39 @@ def test_backward_section_script_cpu():
     with tempfile.NamedTemporaryFile(suffix=".h5", delete=False) as f:
         h5_path = f.name
     try:
-        dump_grouped_tensors(
-            capture, h5_path, group_by=["line"], which="both",
-            include_params=True, replay_scripts=True,
-        )
+        with tempfile.TemporaryDirectory() as kbox_dir:
+            dump_grouped_tensors(
+                capture, h5_path, group_by=["line"], which="both",
+                include_params=True, replay_scripts=True,
+            )
 
-        # Ensure backward groups are discoverable
-        bw_groups = list_groups(h5_path, section="backward", strategy="line")
-        assert len(bw_groups) > 0, "No backward groups found"
+            bw_groups = list_groups(h5_path, section="backward", strategy="line")
+            assert len(bw_groups) > 0, "No backward groups found"
 
-        # Generate a backward section script with validation
-        script = generate_section_script(
-            h5_path, section="backward", strategy="line", validate=True,
-        )
-        assert "def run(input):" in script
-        assert "def check(" in script
+            out_path = os.path.join(kbox_dir, "backward_chain.py")
+            script = generate_section_script(
+                h5_path, section="backward", strategy="line",
+                validate=True, out_path=out_path,
+            )
+            assert "def run(inputs):" in script
+            assert "__main__" in script
 
-        # Execute the generated script on CPU
-        script = script.replace(
-            '_device = "cuda" if torch.cuda.is_available() else "cpu"',
-            '_device = "cpu"',
-        )
-        ns = {"__builtins__": __builtins__, "__file__": h5_path}
-        exec(compile(script, "<backward_section>", "exec"), ns)
+            ns = {"__builtins__": __builtins__}
+            exec(compile(script, "<backward_section>", "exec"), ns)
 
-        run_fn = ns["run"]
-        inp = ns["input"]
-        expected = ns["expected"]
+            init_result = ns["init_once"]()
+            pt_path = os.path.join(kbox_dir, init_result["h5"])
+            inputs, expected = _load_kbox_h5(pt_path, device="cpu")
 
-        assert len(expected) > 0, "No expected outputs in backward section script"
+            assert len(expected) > 0, "No expected outputs in backward section"
 
-        result = run_fn(inp)
-        for i, (got, exp) in enumerate(zip(result, expected)):
-            if isinstance(got, torch.Tensor) and isinstance(exp, torch.Tensor):
-                assert torch.allclose(got, exp, atol=1e-5, rtol=1e-5), (
-                    f"Backward section output {i} mismatch: "
-                    f"max diff {(got - exp).abs().max().item():.2e}"
-                )
+            result = ns["run"](inputs)
+            for i, (got, exp) in enumerate(zip(result, expected)):
+                if isinstance(got, torch.Tensor) and isinstance(exp, torch.Tensor):
+                    assert torch.allclose(got, exp, atol=1e-5, rtol=1e-5), (
+                        f"Backward section output {i} mismatch: "
+                        f"max diff {(got - exp).abs().max().item():.2e}"
+                    )
     finally:
         os.unlink(h5_path)
 
@@ -568,44 +607,48 @@ def test_backward_group_scripts_cpu():
     with tempfile.NamedTemporaryFile(suffix=".h5", delete=False) as f:
         h5_path = f.name
     try:
-        dump_grouped_tensors(
-            capture, h5_path, group_by=["line"], which="both",
-            include_params=True, replay_scripts=True,
-        )
-
-        groups = list_groups(h5_path, section="backward", strategy="line")
-        assert len(groups) > 0
-
-        n_run = 0
-        for g in groups:
-            script = generate_group_script(h5_path, g)
-            script = script.replace(
-                '_device = "cuda" if torch.cuda.is_available() else "cpu"',
-                '_device = "cpu"',
+        with tempfile.TemporaryDirectory() as kbox_dir:
+            dump_grouped_tensors(
+                capture, h5_path, group_by=["line"], which="both",
+                include_params=True, replay_scripts=True,
             )
-            ns = {"__builtins__": __builtins__, "__file__": h5_path}
-            try:
-                exec(compile(script, f"<bw_group_{g.index}>", "exec"), ns)
-            except Exception:
-                continue
-            run_fn, inp, exp = ns.get("run"), ns.get("input"), ns.get("expected")
-            if not (run_fn and inp and exp):
-                continue
-            try:
-                result = run_fn(inp)
-            except Exception:
-                continue
-            if result is None:
-                continue
-            for actual, expected_t in zip(result, exp):
-                if isinstance(actual, torch.Tensor) and isinstance(expected_t, torch.Tensor):
-                    assert torch.equal(actual, expected_t), (
-                        f"Backward group {g.name} mismatch: "
-                        f"max diff {(actual - expected_t).abs().max().item():.2e}"
-                    )
-                    n_run += 1
 
-        assert n_run > 0, "No backward group scripts validated"
+            groups = list_groups(h5_path, section="backward", strategy="line")
+            assert len(groups) > 0
+
+            n_run = 0
+            for g in groups:
+                out_path = os.path.join(kbox_dir, f"test_bw_{g.index}.py")
+                script = generate_group_script(h5_path, g, out_path=out_path)
+
+                ns = {"__builtins__": __builtins__}
+                try:
+                    exec(compile(script, f"<bw_group_{g.index}>", "exec"), ns)
+                except Exception:
+                    continue
+                init_result = ns["init_once"]()
+                pt_path = os.path.join(kbox_dir, init_result["h5"])
+                if not os.path.isfile(pt_path):
+                    continue
+
+                inputs, exp = _load_kbox_h5(pt_path, device="cpu")
+                if not exp:
+                    continue
+                try:
+                    result = ns["run"](inputs)
+                except Exception:
+                    continue
+                if result is None:
+                    continue
+                for actual, expected_t in zip(result, exp):
+                    if isinstance(actual, torch.Tensor) and isinstance(expected_t, torch.Tensor):
+                        assert torch.equal(actual, expected_t), (
+                            f"Backward group {g.name} mismatch: "
+                            f"max diff {(actual - expected_t).abs().max().item():.2e}"
+                        )
+                        n_run += 1
+
+            assert n_run > 0, "No backward group scripts validated"
     finally:
         os.unlink(h5_path)
 
@@ -617,39 +660,41 @@ def test_forward_section_script_cpu():
     with tempfile.NamedTemporaryFile(suffix=".h5", delete=False) as f:
         h5_path = f.name
     try:
-        dump_grouped_tensors(
-            capture, h5_path, group_by=["line"], which="both",
-            include_params=True, replay_scripts=True,
-        )
+        with tempfile.TemporaryDirectory() as kbox_dir:
+            dump_grouped_tensors(
+                capture, h5_path, group_by=["line"], which="both",
+                include_params=True, replay_scripts=True,
+            )
 
-        script = generate_section_script(
-            h5_path, section="forward", strategy="line", validate=True,
-        )
-        assert "def run(input):" in script
-        assert "def check(" in script
+            out_path = os.path.join(kbox_dir, "forward_chain.py")
+            script = generate_section_script(
+                h5_path, section="forward", strategy="line",
+                validate=True, out_path=out_path,
+            )
+            assert "def run(inputs):" in script
+            assert "__main__" in script
 
-        script = script.replace(
-            '_device = "cuda" if torch.cuda.is_available() else "cpu"',
-            '_device = "cpu"',
-        )
-        ns = {"__builtins__": __builtins__, "__file__": h5_path}
-        exec(compile(script, "<forward_section>", "exec"), ns)
+            ns = {"__builtins__": __builtins__}
+            exec(compile(script, "<forward_section>", "exec"), ns)
 
-        result = ns["run"](ns["input"])
-        expected = ns["expected"]
-        assert len(expected) > 0
-        for i, (got, exp) in enumerate(zip(result, expected)):
-            if isinstance(got, torch.Tensor) and isinstance(exp, torch.Tensor):
-                assert torch.allclose(got, exp, atol=1e-5, rtol=1e-5), (
-                    f"Forward section output {i}: "
-                    f"max diff {(got - exp).abs().max().item():.2e}"
-                )
+            init_result = ns["init_once"]()
+            pt_path = os.path.join(kbox_dir, init_result["h5"])
+            inputs, expected = _load_kbox_h5(pt_path, device="cpu")
+
+            assert len(expected) > 0
+            result = ns["run"](inputs)
+            for i, (got, exp) in enumerate(zip(result, expected)):
+                if isinstance(got, torch.Tensor) and isinstance(exp, torch.Tensor):
+                    assert torch.allclose(got, exp, atol=1e-5, rtol=1e-5), (
+                        f"Forward section output {i}: "
+                        f"max diff {(got - exp).abs().max().item():.2e}"
+                    )
     finally:
         os.unlink(h5_path)
 
 
 def test_section_script_relative_path():
-    """Generated section scripts use relative H5 paths."""
+    """Generated section scripts use relative .pt data paths."""
     capture, model, x = _capture_mlp()
     with tempfile.TemporaryDirectory() as tmpdir:
         h5_path = os.path.join(tmpdir, "model.h5")
@@ -663,6 +708,7 @@ def test_section_script_relative_path():
             out_path=out_path,
         )
         # Should NOT contain absolute path
-        assert tmpdir not in script or "os.path.dirname" in script
-        # Should contain relative reference
-        assert "model.h5" in script
+        assert tmpdir not in script
+        # Should contain relative .h5 data reference
+        assert "data/" in script
+        assert ".h5" in script

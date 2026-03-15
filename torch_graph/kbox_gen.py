@@ -3,11 +3,15 @@
 Reads the grouped tensor dumps and replay scripts from an H5 file produced by
 torch-graph's ``dump_grouped_tensors`` and generates standalone Python files that
 work with ``kbox watch`` / ``kbox.iterate()``.
+
+Generated files follow the kernelbox contract:
+  - ``init_once()`` returns ``{"h5": "data/<name>.h5"}``
+  - ``run(inputs)`` uses ``inputs.<name>`` attribute access
+  - Kernelbox handles tensor loading, comparison, and hot-reload
 """
 
 from __future__ import annotations
 
-import fnmatch
 import os
 import re
 import textwrap
@@ -15,9 +19,9 @@ from dataclasses import dataclass, field
 from pathlib import Path
 
 import h5py
-import numpy as np
+import torch
 
-from torch_graph._utils import h5_load_function_source, short_name as _short_name
+from torch_graph._utils import load_h5_tensors, short_name as _short_name
 
 # ── Name mapping ─────────────────────────────────────────────────────────────
 
@@ -276,11 +280,86 @@ def _build_expected_out(replay_script: str, available: set[str]) -> list[tuple[s
     return _build_output_list(replay_script, available)
 
 
-def _h5_relpath(h5_path: str, out_path: str | None) -> str:
-    """Compute relative path from script location to H5 file."""
-    if out_path is None:
-        return os.path.basename(h5_path)
-    return os.path.relpath(h5_path, os.path.dirname(os.path.abspath(out_path)))
+
+def _save_test_h5(
+    src_h5_path: str,
+    input_map: dict[str, str],
+    output_list: list[tuple[str, str]],
+    dest_h5_path: str,
+) -> None:
+    """Save a per-test .h5 file with inputs and expected outputs.
+
+    Follows the kernelbox naming convention (flat datasets at root):
+      - Input tensors use their FX names as keys.
+      - Expected outputs use ``expected_<name>`` (single) or
+        ``expected_<i>_<name>`` (multiple).
+      - ``torch_dtype`` attribute is set for bf16/fp16 (stored as fp32).
+    """
+    import numpy as np
+
+    all_h5_keys = list(set(list(input_map.values()) + [h5 for _, h5 in output_list]))
+    tensors = load_h5_tensors(src_h5_path, keys=all_h5_keys, device="cpu")
+
+    # Build name -> tensor mapping
+    data: dict[str, torch.Tensor] = {}
+    for fx_name, h5_key in input_map.items():
+        if h5_key in tensors:
+            data[fx_name] = tensors[h5_key]
+    for i, (fx_name, h5_key) in enumerate(output_list):
+        if h5_key in tensors:
+            if len(output_list) == 1:
+                data[f"expected_{fx_name}"] = tensors[h5_key]
+            else:
+                data[f"expected_{i}_{fx_name}"] = tensors[h5_key]
+
+    # dtypes that need special storage (no direct numpy equivalent)
+    _NEEDS_CAST = {torch.bfloat16, torch.float16}
+
+    Path(dest_h5_path).parent.mkdir(parents=True, exist_ok=True)
+    with h5py.File(dest_h5_path, "w") as f:
+        for name, t in data.items():
+            if t.dtype in _NEEDS_CAST:
+                # Store as float32, tag with original dtype for restoration
+                arr = t.float().numpy()
+                ds = f.create_dataset(name, data=arr)
+                ds.attrs["torch_dtype"] = str(t.dtype)
+            else:
+                arr = t.numpy() if t.ndim > 0 else np.array(t.item())
+                ds = f.create_dataset(name, data=arr)
+                if t.dtype not in (torch.float32, torch.float64, torch.int64,
+                                   torch.int32, torch.int16, torch.int8,
+                                   torch.uint8, torch.bool):
+                    ds.attrs["torch_dtype"] = str(t.dtype)
+
+
+def _transform_replay(replay_script: str) -> str:
+    """Transform replay script to use ``inputs.name`` and local variables.
+
+    Converts:
+      - ``inputs["name"]`` → ``inputs.name``
+      - ``outputs["name"] = expr`` → ``name = expr``
+      - ``outputs["name"]`` (RHS references) → ``name``
+    """
+    lines = replay_script.strip().splitlines()
+    result = []
+    for line in lines:
+        # inputs["name"] -> inputs.name
+        line = re.sub(r'inputs\["(\w+)"\]', r'inputs.\1', line)
+        line = re.sub(r"inputs\['(\w+)'\]", r'inputs.\1', line)
+        # outputs["name"] = ... -> name = ... (assignment)
+        line = re.sub(r'outputs\["(\w+)"\]\s*=', r'\1 =', line)
+        line = re.sub(r"outputs\['(\w+)'\]\s*=", r'\1 =', line)
+        # outputs["name"] references on RHS -> name
+        line = re.sub(r'outputs\["(\w+)"\]', r'\1', line)
+        line = re.sub(r"outputs\['(\w+)'\]", r'\1', line)
+        result.append(line)
+    return "\n".join(result)
+
+
+def _data_relpath(out_path: str, group: GroupInfo) -> str:
+    """Compute the relative path to the .h5 data file from the test script."""
+    h5_name = _group_filename(group).replace(".py", ".h5")
+    return f"data/{h5_name}"
 
 
 def generate_group_script(
@@ -292,118 +371,89 @@ def generate_group_script(
 ) -> str:
     """Generate a kbox-watch-compatible test file for one group.
 
+    Produces a clean kernelbox-style script:
+      - ``init_once()`` returns ``{"h5": "data/<name>.h5"}``
+      - ``run(inputs)`` uses ``inputs.<name>`` attribute access
+      - A per-test ``.h5`` data file is saved alongside the script
+
     Args:
-        validate: If True, append a ``check()`` block that compares ``run()``
-            output against ``expected`` using ``torch.allclose``.
+        validate: If True, append a standalone ``__main__`` validation block.
     """
     if available is None:
         available = _available_tensors(h5_path)
 
-    h5_basename = os.path.basename(h5_path)
-    h5_rel = _h5_relpath(h5_path, out_path)
     input_map = _build_input_mapping(group.replay_script, available)
     output_list = _build_expected_out(group.replay_script, available)
-
-    # All tensor keys to load
-    all_keys = sorted(set(list(input_map.values()) + [h5 for _, h5 in output_list]))
+    output_fx_names = [fx for fx, _ in output_list]
 
     # Detect missing inputs
     fx_inputs = _parse_replay_inputs(group.replay_script)
     missing = [n for n in fx_inputs if n not in input_map]
 
-    # Imports
-    imports = ["import os", "import torch", "import operator"]
-    if _needs_inf(group.replay_script):
-        imports.append("inf = float('inf')")
+    # Save .h5 data file when we have an output path
+    data_rel = _data_relpath(out_path or "", group)
+    if out_path:
+        data_abs = os.path.join(os.path.dirname(os.path.abspath(out_path)), data_rel)
+        _save_test_h5(h5_path, input_map, output_list, data_abs)
+
+    # Imports — only what's needed
+    imports = ["import torch"]
+    if "operator.getitem" in group.replay_script:
+        imports.append("import operator")
     if _needs_math(group.replay_script):
         imports.append("import math")
 
     # Docstring
-    doc = f'"""{group.name}\nAuto-generated from {h5_basename} — {group.section}/{group.strategy}\n"""'
+    basename = os.path.basename(out_path) if out_path else "test.py"
+    doc = f'"""{group.name}\n\n    kbox iterate {basename}\n"""'
 
-    # Tensor loading — shared inline snippet
-    keys_str = ", ".join(f'"{k}"' for k in all_keys)
-    load_fn = h5_load_function_source()
-    load_block = (
-        f'_device = "cuda" if torch.cuda.is_available() else "cpu"\n'
-        f'H5_PATH = os.path.join(os.path.dirname(os.path.abspath(__file__)), "{h5_rel}")\n'
-        f'{load_fn}'
-        f'_t = _load_h5(H5_PATH, keys=[{keys_str}])'
-    )
+    # init_once — just point at the .h5 data file
+    init_block = f'def init_once():\n    return {{"h5": "{data_rel}"}}'
 
-    # Inputs dict
-    input_lines = []
-    for fx_name in fx_inputs:
-        if fx_name in input_map:
-            h5_key = input_map[fx_name]
-            input_lines.append(f'    "{fx_name}": _t["{h5_key}"],')
-    input_block = "input = {\n" + "\n".join(input_lines) + "\n}"
-
-    # Expected out
-    output_fx_names = [fx for fx, _ in output_list]
-    expected_lines = [f'    _t["{h5}"],  # {fx}' for fx, h5 in output_list]
-    expected_block = "expected = [\n" + "\n".join(expected_lines) + "\n]"
+    # Transform replay script to use inputs.name and local variables
+    replay_body = _transform_replay(group.replay_script)
+    replay_indented = textwrap.indent(replay_body, "    ")
 
     # Return statement
     if output_fx_names:
-        ret_items = ", ".join(f'out["{n}"]' for n in output_fx_names)
+        ret_items = ", ".join(output_fx_names)
         ret_stmt = f"    return [{ret_items}]"
     else:
         ret_stmt = "    return []"
 
-    # Run function (replay script uses inputs["x"]/outputs["x"] -> input["x"]/out["x"])
-    replay_subst = group.replay_script.replace('inputs["', 'input["').replace("inputs['", "input['")
-    replay_subst = replay_subst.replace('outputs["', 'out["').replace("outputs['", "out['")
-    replay_indented = textwrap.indent(replay_subst, "    ")
-    run_block = f"def run(input):\n    out = {{}}\n{replay_indented}\n{ret_stmt}"
+    run_block = f"def run(inputs):\n{replay_indented}\n{ret_stmt}"
 
     # Missing inputs warning
-    missing_block = ""
+    missing_comment = ""
     if missing:
         missing_str = ", ".join(missing)
-        missing_block = (
-            f"\n# WARNING: Missing tensors (not in /tensors/): {missing_str}\n"
-            f"# This group cannot run in isolation. Use --section to generate a chained test.\n"
-        )
+        missing_comment = f"\n# WARNING: Missing tensors: {missing_str}\n"
+
+    imports_block = "\n".join(imports)
 
     # Validation block
     check_block = ""
     if validate and output_list:
         check_block = textwrap.dedent("""\
 
-            # ── Validation ──
-            def check(atol=1e-4, rtol=1e-4):
-                result = run(input)
-                for i, (got, exp) in enumerate(zip(result, expected)):
-                    if not torch.allclose(got, exp, atol=atol, rtol=rtol):
-                        diff = (got - exp).abs().max().item()
-                        print(f"MISMATCH output {i}: max_abs_diff={diff:.6e}")
-                    else:
-                        print(f"OK output {i}")
-
             if __name__ == "__main__":
-                check()
+                import kernelbox as kbox
+                kbox.iterate(__file__)
             """)
 
-    imports_block = "\n".join(imports)
-
     script = f"""\
-#!/usr/bin/env python3
 {doc}
 {imports_block}
+{missing_comment}
 
-# ── Load tensors (done once) ──
-{load_block}
-{missing_block}
-# ── Input ──
-{input_block}
+{init_block}
 
-# ── Expected out ──
-{expected_block}
 
-# ── Replay (edit this!) ──
 {run_block}
 {check_block}"""
+
+    # Clean up extra blank lines
+    script = re.sub(r'\n{3,}', '\n\n\n', script)
 
     if out_path:
         Path(out_path).parent.mkdir(parents=True, exist_ok=True)
@@ -513,105 +563,80 @@ def generate_section_script(
     ops = _collect_ops_toposorted(h5_path, section, strategy)
     available = _available_tensors(h5_path)
     h5_basename = os.path.basename(h5_path)
-    h5_rel = _h5_relpath(h5_path, out_path)
 
-    # Collect tensor keys and expected out from groups
-    all_tensor_keys: set[str] = set()
+    # Collect all external inputs and expected outputs
     all_input_keys: dict[str, str] = {}
-
-    needs_inf_val = False
     needs_math_mod = False
 
-    # Scan all op replay scripts for imports
     for _, rs in ops:
         if _needs_math(rs):
             needs_math_mod = True
-        if _needs_inf(rs):
-            needs_inf_val = True
 
     for g in groups:
         inp_map = _build_input_mapping(g.replay_script, available)
         for fx, h5 in inp_map.items():
             all_input_keys[fx] = h5
-            all_tensor_keys.add(h5)
 
-    # Expected: last output of each group for section-level validation.
+    # Expected: last output of each group for section-level validation
     expected_pairs: list[tuple[str, str]] = []
     for g in groups:
         for fx, h5 in _build_expected_out(g.replay_script, available):
             expected_pairs.append((fx, h5))
-            all_tensor_keys.add(h5)
     # Deduplicate (keep last occurrence per fx_name)
     seen_expected: dict[str, str] = {}
     for fx, h5 in expected_pairs:
         seen_expected[fx] = h5
     expected_pairs = list(seen_expected.items())
+    expected_fx_names = [fx for fx, _ in expected_pairs]
+
+    # Save .h5 data file
+    data_rel = f"data/{section}_{strategy}_chain.h5"
+    if out_path:
+        data_abs = os.path.join(os.path.dirname(os.path.abspath(out_path)), data_rel)
+        _save_test_h5(h5_path, all_input_keys, expected_pairs, data_abs)
 
     # Build script
-    doc = f'"""{section}/{strategy} — {len(ops)} ops from {len(groups)} groups\nAuto-generated from {h5_basename}\n"""'
+    basename = os.path.basename(out_path) if out_path else "chain.py"
+    doc = f'"""{section}/{strategy} — {len(ops)} ops from {len(groups)} groups\n\n    kbox iterate {basename}\n"""'
 
-    imports = ["import os", "import torch", "import operator"]
-    if needs_inf_val:
-        imports.append("inf = float('inf')")
+    imports = ["import torch"]
+    if any("operator.getitem" in rs for _, rs in ops):
+        imports.append("import operator")
     if needs_math_mod:
         imports.append("import math")
     imports_block = "\n".join(imports)
 
-    expected_fx_names = [fx for fx, _ in expected_pairs]
-    expected_items = ", ".join(f'"{fx}"' for fx in expected_fx_names)
+    init_block = f'def init_once():\n    return {{"h5": "{data_rel}"}}'
 
-    # Load tensors using shared inline loader (maps short→long names for backward)
-    load_fn = h5_load_function_source(map_short_to_long=True)
-    load_block = (
-        f'_device = "cuda" if torch.cuda.is_available() else "cpu"\n'
-        f'H5_PATH = os.path.join(os.path.dirname(os.path.abspath(__file__)), "{h5_rel}")\n'
-        f'{load_fn}\n'
-        f'input = _load_h5(H5_PATH)\n'
-        f'expected = [input[k] for k in [{expected_items}] if k in input]'
-    )
-
-    # Run function — flat ops in topological order
-    # Pre-pass: produced names (LHS of chain) and max LHS width
+    # Run function — flat ops in topological order using local variables
     produced: set[str] = set()
-    max_lhs = 0
     for _, rs in ops:
         m = re.match(r'outputs\["(\w+)"\]\s*=', rs.strip())
         if m:
             produced.add(m.group(1))
-            max_lhs = max(max_lhs, len(f'out["{m.group(1)}"]'))
-    align_width = min(max_lhs, 20)
 
     def _ref(name: str) -> str:
-        return f'out["{name}"]' if name in produced else f'input["{name}"]'
+        return name if name in produced else f'inputs.{name}'
 
-    run_lines = [
-        "def run(input):",
-        "    out = {}",
-    ]
-    expected_fx_names = [fx for fx, _ in expected_pairs]
+    run_lines = ["def run(inputs):"]
 
     prev_group = None
     for gname, rs in ops:
         if gname != prev_group:
-            short = gname if len(gname) <= 500 else gname[:497] + "..."
+            short = gname if len(gname) <= 80 else gname[:77] + "..."
             run_lines.append(f"    # ── {short} ──")
             prev_group = gname
         line = rs.strip()
         m = re.match(r'outputs\["(\w+)"\]\s*=\s*(.*)', line)
         if m:
             oname, expr = m.group(1), m.group(2)
-            # RHS: use out for produced names, input for external
             expr = re.sub(r'(?:outputs|inputs)\["(\w+)"\]', lambda m: _ref(m.group(1)), expr)
-            # Fix bare inf/−inf that would cause NameError
-            expr = re.sub(r"([\s,(])-inf\b", r"\1float('-inf')", expr)
-            expr = re.sub(r"([\s,(])inf\b", r"\1float('inf')", expr)
-            lhs = f'out["{oname}"]'
-            run_lines.append(f'    {lhs:<{align_width}} = {expr}')
+            run_lines.append(f'    {oname} = {expr}')
         else:
             run_lines.append(f"    {line}")
 
     run_lines.append("")
-    ret_items = ", ".join(f'out["{n}"]' for n in expected_fx_names)
+    ret_items = ", ".join(expected_fx_names)
     run_lines.append(f"    return [{ret_items}]")
 
     run_block = "\n".join(run_lines)
@@ -621,29 +646,24 @@ def generate_section_script(
     if validate and expected_pairs:
         check_block = textwrap.dedent("""\
 
-            # ── Validation ──
-            def check(atol=1e-4, rtol=1e-4):
-                result = run(input)
-                for i, (got, exp) in enumerate(zip(result, expected)):
-                    if not torch.allclose(got, exp, atol=atol, rtol=rtol):
-                        diff = (got - exp).abs().max().item()
-                        print(f"MISMATCH output {i}: max_abs_diff={diff:.6e}")
-                    else:
-                        print(f"OK output {i}")
-
             if __name__ == "__main__":
-                check()
+                import kernelbox as kbox
+                kbox.iterate(__file__)
             """)
 
     script = f"""\
-#!/usr/bin/env python3
 {doc}
 {imports_block}
 
-{load_block}
+
+{init_block}
+
 
 {run_block}
 {check_block}"""
+
+    # Clean up extra blank lines
+    script = re.sub(r'\n{3,}', '\n\n\n', script)
 
     if out_path:
         Path(out_path).parent.mkdir(parents=True, exist_ok=True)

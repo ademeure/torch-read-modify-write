@@ -303,7 +303,7 @@ def _build_expected_out(replay_script: str, available: set[str]) -> list[tuple[s
 
 
 def _tensor_metadata(h5_path: str, keys: list[str]) -> dict[str, dict]:
-    """Read shape and dtype from h5 tensor datasets without loading data."""
+    """Read shape, dtype, strides, and contiguity from h5 tensor datasets."""
     _NP_TO_TORCH = {
         "float16": "float16", "float32": "float32", "float64": "float64",
         "int8": "int8", "int16": "int16", "int32": "int32", "int64": "int64",
@@ -328,17 +328,34 @@ def _tensor_metadata(h5_path: str, keys: list[str]) -> dict[str, dict]:
             bytes_per = {"float32": 4, "float64": 8, "float16": 2, "bfloat16": 2,
                          "int64": 8, "int32": 4, "int16": 2, "int8": 1,
                          "uint8": 1, "bool": 1}.get(dtype_str, 4)
-            result[key] = {
+            entry: dict = {
                 "shape": shape,
                 "dtype": dtype_str,
                 "numel": numel,
                 "bytes": numel * bytes_per,
             }
+            # Strides and contiguity (stored by op_dump)
+            if "strides" in ds.attrs:
+                entry["strides"] = [int(s) for s in ds.attrs["strides"]]
+            if "is_contiguous" in ds.attrs:
+                entry["is_contiguous"] = bool(ds.attrs["is_contiguous"])
+            result[key] = entry
     return result
 
 
+def _format_stride(meta: dict) -> str:
+    """Format stride info as a compact string, e.g. 'strides=(512,32,1) C'."""
+    strides = meta.get("strides")
+    if not strides:
+        return ""
+    contig = meta.get("is_contiguous", True)
+    flag = "C" if contig else "NC"
+    s = ",".join(str(x) for x in strides)
+    return f"strides=({s}) {flag}"
+
+
 def _format_tensor_line(name: str, meta: dict, max_name: int = 20) -> str:
-    """Format one tensor metadata line: ``name: dtype[shape]  (size)``."""
+    """Format one tensor metadata line: ``name: dtype[shape]  strides  (size)``."""
     shape_str = "x".join(str(s) for s in meta["shape"]) if meta["shape"] else "scalar"
     size = meta["bytes"]
     if size >= 1024 * 1024:
@@ -347,6 +364,9 @@ def _format_tensor_line(name: str, meta: dict, max_name: int = 20) -> str:
         size_str = f"{size / 1024:.1f}KB"
     else:
         size_str = f"{size}B"
+    stride_str = _format_stride(meta)
+    if stride_str:
+        return f"  {name:<{max_name}}  {meta['dtype']}[{shape_str}]  {stride_str}  {size_str}"
     return f"  {name:<{max_name}}  {meta['dtype']}[{shape_str}]  {size_str}"
 
 
@@ -621,17 +641,46 @@ def _save_test_h5(
                     ds.attrs["torch_dtype"] = str(t.dtype)
 
 
-def _transform_replay(replay_script: str) -> str:
+def _build_stride_map(h5_path: str, available: set[str]) -> dict[str, str]:
+    """Build FX-name → stride comment string for all tensors in the H5 file.
+
+    Returns a dict like ``{"add_1": "strides=(512,32,1) C", ...}``.
+    """
+    all_keys = list(available)
+    meta = _tensor_metadata(h5_path, all_keys)
+    result: dict[str, str] = {}
+    # Map short h5 keys back to both short and long FX names
+    for h5_key, m in meta.items():
+        s = _format_stride(m)
+        if s:
+            result[h5_key] = s
+            # Also map the long FX name (e.g. p6 -> primals_6)
+            long = _long_name(h5_key)
+            if long != h5_key:
+                result[long] = s
+    return result
+
+
+def _transform_replay(
+    replay_script: str,
+    stride_map: dict[str, str] | None = None,
+) -> str:
     """Transform replay script to use ``inputs.name`` and local variables.
 
     Converts:
       - ``inputs["name"]`` → ``inputs.name``
       - ``outputs["name"] = expr`` → ``name = expr``
       - ``outputs["name"]`` (RHS references) → ``name``
+
+    When *stride_map* is provided, appends stride comments on each output line.
     """
     lines = replay_script.strip().splitlines()
     result = []
     for line in lines:
+        # Extract output name before transformation (for stride lookup)
+        out_match = re.match(r'outputs\["(\w+)"\]\s*=', line)
+        out_name = out_match.group(1) if out_match else None
+
         # inputs["name"] -> inputs.name
         line = re.sub(r'inputs\["(\w+)"\]', r'inputs.\1', line)
         line = re.sub(r"inputs\['(\w+)'\]", r'inputs.\1', line)
@@ -641,6 +690,14 @@ def _transform_replay(replay_script: str) -> str:
         # outputs["name"] references on RHS -> name
         line = re.sub(r'outputs\["(\w+)"\]', r'\1', line)
         line = re.sub(r"outputs\['(\w+)'\]", r'\1', line)
+
+        # Append stride comment for output
+        if stride_map and out_name:
+            h5_key = _short_name(out_name)
+            stride_str = stride_map.get(h5_key) or stride_map.get(out_name)
+            if stride_str:
+                line = f"{line}  # {stride_str}"
+
         result.append(line)
     return "\n".join(result)
 
@@ -773,6 +830,9 @@ def generate_unique_group_script(
             expected_generics, available, inst_path,
         )
 
+    # Build stride map from first instance's tensors
+    stride_map = _build_stride_map(h5_path, available)
+
     # Build the script — use first instance's names for readability
     replay = ug.normalized_script
     # Replace generic I0/O0 markers with first instance's actual names
@@ -783,7 +843,7 @@ def generate_unique_group_script(
     for gen, actual in first_out.items():
         replay = replay.replace(f'outputs["{gen}"]', f'outputs["{actual}"]')
         replay = re.sub(rf'\b{re.escape(gen)}\b(?!\w)', actual, replay)
-    replay_body = _transform_replay(replay)
+    replay_body = _transform_replay(replay, stride_map=stride_map)
     replay_indented = textwrap.indent(replay_body, "    ")
 
     # Imports
@@ -822,7 +882,23 @@ def generate_unique_group_script(
     doc = f'"""{ug.module_type} ({len(ug.groups)} instances: {instances_str})\n{ug.source_desc}\n\n{meta_block}\n\n    kbox iterate {py_name}\n"""'
 
     init_block = f'def init_once():\n    return {{"h5_suite": "{suite_rel}/"}}'
-    run_block = f"def run(inputs):\n{replay_indented}\n{ret_stmt}"
+
+    # Input stride comments for the first instance
+    input_stride_lines = []
+    g0_fx_inputs_for_strides = _parse_replay_inputs(g0.replay_script)
+    for fx_name in g0_fx_inputs_for_strides:
+        h5_key = _fx_to_h5(fx_name, available)
+        s = stride_map.get(h5_key) if h5_key else stride_map.get(fx_name)
+        if s:
+            input_stride_lines.append(f"    # {fx_name}: {s}")
+    input_strides_block = "\n".join(input_stride_lines)
+
+    run_parts = [f"def run(inputs):"]
+    if input_stride_lines:
+        run_parts.append(input_strides_block)
+    run_parts.append(replay_indented)
+    run_parts.append(ret_stmt)
+    run_block = "\n".join(run_parts)
 
     script = f"""\
 {doc}
@@ -899,8 +975,22 @@ def generate_group_script(
     # init_once — just point at the .h5 data file
     init_block = f'def init_once():\n    return {{"h5": "{data_rel}"}}'
 
+    # Build stride map for inline comments
+    stride_map = _build_stride_map(h5_path, available)
+
+    # Input stride comments block
+    input_stride_lines = []
+    for fx_name in fx_inputs:
+        if fx_name not in input_map:
+            continue
+        h5_key = input_map[fx_name]
+        s = stride_map.get(h5_key) or stride_map.get(fx_name)
+        if s:
+            input_stride_lines.append(f"    # {fx_name}: {s}")
+    input_strides_block = "\n".join(input_stride_lines)
+
     # Transform replay script to use inputs.name and local variables
-    replay_body = _transform_replay(group.replay_script)
+    replay_body = _transform_replay(group.replay_script, stride_map=stride_map)
     replay_indented = textwrap.indent(replay_body, "    ")
 
     # Return statement
@@ -910,7 +1000,12 @@ def generate_group_script(
     else:
         ret_stmt = "    return []"
 
-    run_block = f"def run(inputs):\n{replay_indented}\n{ret_stmt}"
+    run_parts = [f"def run(inputs):"]
+    if input_stride_lines:
+        run_parts.append(input_strides_block)
+    run_parts.append(replay_indented)
+    run_parts.append(ret_stmt)
+    run_block = "\n".join(run_parts)
 
     # Missing inputs warning
     missing_comment = ""
@@ -1097,6 +1192,9 @@ def generate_section_script(
 
     init_block = f'def init_once():\n    return {{"h5": "{data_rel}"}}'
 
+    # Build stride map for inline comments
+    stride_map = _build_stride_map(h5_path, available)
+
     # Run function — flat ops in topological order using local variables
     produced: set[str] = set()
     for _, rs in ops:
@@ -1109,6 +1207,13 @@ def generate_section_script(
 
     run_lines = ["def run(inputs):"]
 
+    # Input stride comments
+    for fx_name in sorted(all_input_keys.keys()):
+        h5_key = all_input_keys[fx_name]
+        s = stride_map.get(h5_key) or stride_map.get(fx_name)
+        if s:
+            run_lines.append(f"    # {fx_name}: {s}")
+
     prev_group = None
     for gname, rs in ops:
         if gname != prev_group:
@@ -1120,7 +1225,12 @@ def generate_section_script(
         if m:
             oname, expr = m.group(1), m.group(2)
             expr = re.sub(r'(?:outputs|inputs)\["(\w+)"\]', lambda m: _ref(m.group(1)), expr)
-            run_lines.append(f'    {oname} = {expr}')
+            stride_comment = ""
+            h5_key = _short_name(oname)
+            s = stride_map.get(h5_key) or stride_map.get(oname)
+            if s:
+                stride_comment = f"  # {s}"
+            run_lines.append(f'    {oname} = {expr}{stride_comment}')
         else:
             run_lines.append(f"    {line}")
 

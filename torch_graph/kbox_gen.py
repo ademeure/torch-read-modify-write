@@ -302,6 +302,119 @@ def _build_expected_out(replay_script: str, available: set[str]) -> list[tuple[s
 
 
 
+def _tensor_metadata(h5_path: str, keys: list[str]) -> dict[str, dict]:
+    """Read shape and dtype from h5 tensor datasets without loading data."""
+    _NP_TO_TORCH = {
+        "float16": "float16", "float32": "float32", "float64": "float64",
+        "int8": "int8", "int16": "int16", "int32": "int32", "int64": "int64",
+        "uint8": "uint8", "bool": "bool",
+    }
+    result = {}
+    with h5py.File(h5_path, "r") as f:
+        grp = f.get("tensors", f)  # try /tensors/ first, then root
+        for key in keys:
+            if key not in grp:
+                continue
+            ds = grp[key]
+            shape = list(ds.shape)
+            torch_dtype = ds.attrs.get("torch_dtype", "")
+            if torch_dtype:
+                dtype_str = torch_dtype.replace("torch.", "")
+            else:
+                dtype_str = _NP_TO_TORCH.get(str(ds.dtype), str(ds.dtype))
+            numel = 1
+            for s in shape:
+                numel *= s
+            bytes_per = {"float32": 4, "float64": 8, "float16": 2, "bfloat16": 2,
+                         "int64": 8, "int32": 4, "int16": 2, "int8": 1,
+                         "uint8": 1, "bool": 1}.get(dtype_str, 4)
+            result[key] = {
+                "shape": shape,
+                "dtype": dtype_str,
+                "numel": numel,
+                "bytes": numel * bytes_per,
+            }
+    return result
+
+
+def _format_tensor_line(name: str, meta: dict, max_name: int = 20) -> str:
+    """Format one tensor metadata line: ``name: dtype[shape]  (size)``."""
+    shape_str = "x".join(str(s) for s in meta["shape"]) if meta["shape"] else "scalar"
+    size = meta["bytes"]
+    if size >= 1024 * 1024:
+        size_str = f"{size / 1024 / 1024:.1f}MB"
+    elif size >= 1024:
+        size_str = f"{size / 1024:.1f}KB"
+    else:
+        size_str = f"{size}B"
+    return f"  {name:<{max_name}}  {meta['dtype']}[{shape_str}]  {size_str}"
+
+
+def _op_summary(replay_script: str) -> str:
+    """Summarize aten ops in a replay script."""
+    from collections import Counter
+    ops = re.findall(r'torch\.ops\.aten\.(\w+)', replay_script)
+    getitems = replay_script.count('operator.getitem')
+    counts = Counter(ops)
+    parts = []
+    for op, n in counts.most_common():
+        parts.append(f"{op} x{n}" if n > 1 else op)
+    if getitems:
+        parts.append(f"getitem x{getitems}" if getitems > 1 else "getitem")
+    total = len(ops) + getitems
+    return f"{', '.join(parts)}  ({total} ops)"
+
+
+def _build_metadata_block(
+    h5_path: str,
+    input_map: dict[str, str],
+    output_list: list[tuple[str, str]],
+    replay_script: str,
+    fx_inputs: list[str],
+) -> str:
+    """Build a metadata comment block with tensor info and op summary."""
+    all_h5_keys = list(set(
+        list(input_map.values()) + [h5 for _, h5 in output_list]
+    ))
+    meta = _tensor_metadata(h5_path, all_h5_keys)
+
+    lines = []
+    max_name = max((len(n) for n in fx_inputs if n in input_map), default=10)
+    max_name = max(max_name, max((len(fx) for fx, _ in output_list), default=10))
+
+    # Inputs
+    total_in = 0
+    inp_lines = []
+    for fx_name in fx_inputs:
+        if fx_name not in input_map:
+            continue
+        h5_key = input_map[fx_name]
+        if h5_key in meta:
+            inp_lines.append(_format_tensor_line(fx_name, meta[h5_key], max_name))
+            total_in += meta[h5_key]["bytes"]
+    if inp_lines:
+        in_size = f"{total_in / 1024:.1f}KB" if total_in >= 1024 else f"{total_in}B"
+        lines.append(f"Inputs ({in_size} total):")
+        lines.extend(inp_lines)
+
+    # Outputs
+    total_out = 0
+    out_lines = []
+    for fx_name, h5_key in output_list:
+        if h5_key in meta:
+            out_lines.append(_format_tensor_line(fx_name, meta[h5_key], max_name))
+            total_out += meta[h5_key]["bytes"]
+    if out_lines:
+        out_size = f"{total_out / 1024:.1f}KB" if total_out >= 1024 else f"{total_out}B"
+        lines.append(f"Outputs ({out_size} total):")
+        lines.extend(out_lines)
+
+    # Ops
+    lines.append(f"Ops: {_op_summary(replay_script)}")
+
+    return "\n".join(lines)
+
+
 def _extract_primary_op(replay_script: str) -> str:
     """Extract the primary aten op name from a replay script for filename use."""
     # Find all aten ops, take the last non-trivial one
@@ -694,8 +807,19 @@ def generate_unique_group_script(
     labels = [_instance_label(g) for g in ug.groups]
     instances_str = ", ".join(labels)
 
+    # Tensor metadata from first instance
+    g0 = ug.groups[0]
+    first_inp = ug.input_maps[0]
+    first_out = ug.output_maps[0]
+    # Build input_map and output_list in the format _build_metadata_block expects
+    g0_input_map = _build_input_mapping(g0.replay_script, available)
+    g0_output_list = _build_expected_out(g0.replay_script, available)
+    g0_fx_inputs = _parse_replay_inputs(g0.replay_script)
+    meta_block = _build_metadata_block(h5_path, g0_input_map, g0_output_list,
+                                        g0.replay_script, g0_fx_inputs)
+
     py_name = f"grp_{ug.fn_name}.py"
-    doc = f'"""{ug.module_type} ({len(ug.groups)} instances: {instances_str})\n{ug.source_desc}\n\n    kbox iterate {py_name}\n"""'
+    doc = f'"""{ug.module_type} ({len(ug.groups)} instances: {instances_str})\n{ug.source_desc}\n\n{meta_block}\n\n    kbox iterate {py_name}\n"""'
 
     init_block = f'def init_once():\n    return {{"h5_suite": "{suite_rel}/"}}'
     run_block = f"def run(inputs):\n{replay_indented}\n{ret_stmt}"
@@ -766,9 +890,11 @@ def generate_group_script(
     if _needs_math(group.replay_script):
         imports.append("import math")
 
-    # Docstring
+    # Docstring with tensor metadata
     basename = os.path.basename(out_path) if out_path else "test.py"
-    doc = f'"""{group.name}\n\n    kbox iterate {basename}\n"""'
+    meta_block = _build_metadata_block(h5_path, input_map, output_list,
+                                        group.replay_script, fx_inputs)
+    doc = f'"""{group.name}\n\n{meta_block}\n\n    kbox iterate {basename}\n"""'
 
     # init_once — just point at the .h5 data file
     init_block = f'def init_once():\n    return {{"h5": "{data_rel}"}}'

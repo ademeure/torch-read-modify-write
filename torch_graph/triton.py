@@ -300,38 +300,37 @@ def _parse_output_code(code: str, capture: TritonCapture) -> None:
 def _parse_triton_kernel_definitions(code: str, capture: TritonCapture) -> None:
     """Extract Triton kernel definitions with their aten op annotations.
 
-    Looks for comment blocks like:
+    Supports two Inductor output formats:
+
+    Legacy (async_compile):
         # Topologically Sorted Source Nodes: [linear, x], Original ATen: [aten.addmm, aten.relu]
-        # Source node to ATen node mapping:
-        #   linear => add_tensor
-        #   x => relu
         triton_poi_fused_addmm_relu_0 = async_compile.triton('triton_poi_fused_addmm_relu_0', '''
         ...
         ''', device_str='cuda')
+
+    Modern (PyTorch 2.10+, inline @triton.jit):
+        # Topologically Sorted Source Nodes: [pos], Original ATen: [aten.arange]
+        # ... optional heuristics decorators ...
+        @triton.jit
+        def triton_poi_fused_arange_0(out_ptr0, xnumel, XBLOCK : tl.constexpr):
+            ...
     """
-    kernel_pattern = re.compile(
+    # --- Legacy async_compile format ---
+    legacy_pattern = re.compile(
         r"# Topologically Sorted Source Nodes: \[([^\]]*)\], Original ATen: \[([^\]]*)\]\n"
         r"((?:#[^\n]*\n)*)"  # optional additional comment lines (mapping, graph fragment)
         r"(\w+)\s*=\s*async_compile\.triton\('[^']+',\s*'''(.*?)'''",
         re.DOTALL,
     )
 
-    for match in kernel_pattern.finditer(code):
+    for match in legacy_pattern.finditer(code):
         source_nodes = [s.strip() for s in match.group(1).split(",")]
         aten_ops = [s.strip() for s in match.group(2).split(",")]
         extra_comments = match.group(3)
         kernel_name = match.group(4)
         kernel_source = match.group(5).strip()
 
-        aten_to_source = {}
-        for line in extra_comments.split("\n"):
-            line = line.strip().lstrip("#").strip()
-            if "=>" in line:
-                parts = line.split("=>")
-                if len(parts) == 2:
-                    src = parts[0].strip()
-                    aten_node = parts[1].strip()
-                    aten_to_source[aten_node] = src
+        aten_to_source = _parse_source_mapping(extra_comments)
 
         kernel = TritonKernel(
             name=kernel_name,
@@ -342,6 +341,94 @@ def _parse_triton_kernel_definitions(code: str, capture: TritonCapture) -> None:
             aten_to_source_map=aten_to_source,
         )
         capture.kernels.append(kernel)
+
+    if capture.kernels:
+        return  # Legacy format matched, skip modern format
+
+    # --- Modern inline @triton.jit format (PyTorch 2.10+) ---
+    # Two-pass approach: first find all kernel defs with @triton.jit, then
+    # walk backwards to find the associated comment block.
+
+    # Pass 1: Find all @triton.jit kernel definitions and their source
+    kernel_def_pattern = re.compile(
+        r"@triton\.jit\ndef (triton_\w+)\(([^)]*)\):(.*?)(?=\n@triton\.|\ntriton_helpers|\nclass |\ndef call\(|\Z)",
+        re.DOTALL,
+    )
+    kernel_sources: dict[str, str] = {}
+    kernel_positions: dict[str, int] = {}
+    for m in kernel_def_pattern.finditer(code):
+        kernel_sources[m.group(1)] = m.group(0).strip()
+        kernel_positions[m.group(1)] = m.start()
+
+    if not kernel_positions:
+        return
+
+    # Pass 2: For each kernel, scan backwards from its position to find the
+    # "Topologically Sorted Source Nodes" comment block
+    topo_pattern = re.compile(
+        r"# Topologically Sorted Source Nodes: \[([^\]]*)\], Original ATen: \[([^\]]*)\]"
+    )
+    source_map_pattern = re.compile(r"#\s+(\S.*?)\s+=>\s+(\S.*)")
+
+    for kname, pos in kernel_positions.items():
+        # Look at the text before this kernel def.  Large kernels can have
+        # 5000+ chars of triton_meta/inductor_meta decorators between the
+        # "Topologically Sorted" comment and the @triton.jit line.
+        preceding = code[max(0, pos - 20000):pos]
+        lines = preceding.split("\n")
+
+        # Find the last "Topologically Sorted" comment
+        topo_match = None
+        comment_block_lines: list[str] = []
+        for i in range(len(lines) - 1, -1, -1):
+            m = topo_pattern.search(lines[i])
+            if m:
+                topo_match = m
+                # Collect comment lines below it until non-comment
+                comment_block_lines = []
+                for j in range(i + 1, len(lines)):
+                    if lines[j].strip().startswith("#"):
+                        comment_block_lines.append(lines[j])
+                    else:
+                        break
+                break
+
+        if not topo_match:
+            continue
+
+        source_nodes = [s.strip() for s in topo_match.group(1).split(",")]
+        aten_ops = [s.strip() for s in topo_match.group(2).split(",")]
+
+        # Parse source → aten mapping from comment block
+        aten_to_source: dict[str, str] = {}
+        for cline in comment_block_lines:
+            sm = source_map_pattern.match(cline.strip())
+            if sm:
+                aten_to_source[sm.group(2)] = sm.group(1)
+
+        kernel = TritonKernel(
+            name=kname,
+            source_code=kernel_sources.get(kname, ""),
+            fused_aten_ops=aten_ops,
+            fused_source_nodes=source_nodes,
+            kernel_type="triton",
+            aten_to_source_map=aten_to_source,
+        )
+        capture.kernels.append(kernel)
+
+
+def _parse_source_mapping(comments: str) -> dict[str, str]:
+    """Parse '# source_node => aten_node' mapping lines from comment block."""
+    mapping: dict[str, str] = {}
+    for line in comments.split("\n"):
+        line = line.strip().lstrip("#").strip()
+        if "=>" in line:
+            parts = line.split("=>")
+            if len(parts) == 2:
+                src = parts[0].strip()
+                aten_node = parts[1].strip()
+                mapping[aten_node] = src
+    return mapping
 
 
 def _parse_call_method(code: str, capture: TritonCapture) -> None:

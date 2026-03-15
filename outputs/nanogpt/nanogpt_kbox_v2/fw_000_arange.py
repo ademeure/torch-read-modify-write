@@ -1,7 +1,7 @@
 """000_model.py:67 | pos = torch.arange(0, T, dtype=torch.long, device=idx.device)
 
 Outputs (128B total):
-  arange      int64[16]  128B
+  arange      int64[16]  strides=(1) C  128B
 Ops: arange  (1 ops)
 
     kbox iterate fw_000_arange.py
@@ -14,5 +14,5 @@ def init_once():
 
 
 def run(inputs):
-    arange = torch.ops.aten.arange.start(0, 16, dtype=torch.int64, device=torch.device("cuda:0"), pin_memory=False)
+    arange = torch.ops.aten.arange.start(0, 16, dtype=torch.int64, device=torch.device("cuda:0"), pin_memory=False)  # strides=(1) C
     return [arange]

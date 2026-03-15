@@ -1,9 +1,9 @@
 """020_model.py:24 [blocks.1] | q = q.view(B, T, self.n_head, self.head_dim).transpose(1, 2)
 
 Inputs (4.0KB total):
-  getitem_12   float32[2x16x32]  4.0KB
+  getitem_12   float32[2x16x32]  strides=(1536,96,1) NC  4.0KB
 Outputs (4.0KB total):
-  transpose_5  float32[2x2x16x16]  4.0KB
+  transpose_5  float32[2x2x16x16]  strides=(1536,16,96,1) NC  4.0KB
 Ops: view, transpose  (2 ops)
 
     kbox iterate fw_020_transpose.py
@@ -16,6 +16,7 @@ def init_once():
 
 
 def run(inputs):
-    view_17 = torch.ops.aten.view.default(inputs.getitem_12, [2, 16, 2, 16])
-    transpose_5 = torch.ops.aten.transpose.int(view_17, 1, 2)
+    # getitem_12: strides=(1536,96,1) NC
+    view_17 = torch.ops.aten.view.default(inputs.getitem_12, [2, 16, 2, 16])  # strides=(1536,96,16,1) NC
+    transpose_5 = torch.ops.aten.transpose.int(view_17, 1, 2)  # strides=(1536,16,96,1) NC
     return [transpose_5]

@@ -380,6 +380,7 @@ def build_aten_forward(
     mutated_buffers: list[str] | None = None,
     validate: bool = True,
     user_input_order: list[int] | None = None,
+    compile: bool = False,
 ) -> Callable:
     """Build an aten forward callable without modifying model.forward.
 
@@ -387,11 +388,22 @@ def build_aten_forward(
     live and runs aten forward/backward via autograd.Function. Backward works
     automatically when loss.backward() is called.
 
+    When *compile* is True, the aten forward and backward functions are wrapped
+    with ``torch.compile(backend="inductor")`` so that Inductor fuses the aten
+    ops into Triton kernels.  This gives near-``torch.compile(model)``
+    performance while keeping the aten .py file as the editable source of truth.
+    First call incurs a compilation overhead; subsequent calls run fused kernels.
+
     Used by multi-variant dispatch where each call pattern gets its own
     aten graph. Also used by install() for single-variant monkey-patching.
     """
     aten_forward = aten_module.forward
     aten_backward = getattr(aten_module, 'backward', None)
+
+    if compile:
+        aten_forward = torch.compile(aten_forward, backend="inductor")
+        if aten_backward is not None:
+            aten_backward = torch.compile(aten_backward, backend="inductor")
     _mutated_buffers = mutated_buffers or []
 
     if param_paths is None:
@@ -545,12 +557,16 @@ def install(
     num_real_outputs: int = 1,
     num_mutations: int = 0,
     mutated_buffers: list[str] | None = None,
+    compile: bool = False,
 ) -> None:
     """Replace model's forward/backward with captured aten graphs.
 
     Drop-in replacement for torch.compile(model). After install(), model(x)
     runs the aten forward and loss.backward() runs the aten backward.
     Parameters are read directly so the optimizer sees them normally.
+
+    When *compile* is True, the aten forward/backward are wrapped with
+    ``torch.compile(backend="inductor")`` for Triton kernel fusion.
     """
     if param_paths is None:
         param_paths = _parse_param_paths(aten_module)
@@ -562,6 +578,7 @@ def install(
         num_mutations=num_mutations,
         mutated_buffers=mutated_buffers,
         validate=validate,
+        compile=compile,
     )
 
     model._original_forward = model.forward

@@ -2500,6 +2500,7 @@ def export_graph_to_python(
     kernel_map: dict[str, str] | None = None,
     uniquify: bool = False,
     _unique_fn_defs: list[str] | None = None,
+    _unique_groups: list | None = None,
 ) -> str:
     """Export an FX GraphModule as a standalone Python function.
 
@@ -2519,6 +2520,9 @@ def export_graph_to_python(
         _unique_fn_defs: When *uniquify* is True, append generated helper
             function definition strings to this list (caller uses them to
             emit a SHARED LAYER FUNCTIONS section).
+        _unique_groups: When *uniquify* is True, append detected
+            ``_UniqueGroup`` objects to this list (caller can use them to
+            generate CUDA kernel templates).
     """
     buf = StringIO()
     graph = graph_module.graph
@@ -2616,6 +2620,8 @@ def export_graph_to_python(
         for group in unique_groups:
             if _unique_fn_defs is not None:
                 _unique_fn_defs.append(_generate_unique_fn_def(group))
+            if _unique_groups is not None:
+                _unique_groups.append(group)
             for idx in group.instance_order:
                 first = group.first_node_per_instance.get(idx)
                 if first:
@@ -2928,6 +2934,7 @@ def export_aten_program(
     kernel_map: dict[str, str] | None = None,
     skip_pt: bool = False,
     uniquify: bool = True,
+    emit_cuda_stubs: bool = False,
 ) -> Path:
     """Export full forward+backward as a standalone Python program.
 
@@ -2938,6 +2945,11 @@ def export_aten_program(
     - Includes both forward and backward as separate functions
     - Has a test harness that verifies each intermediate tensor
     - Is fully editable: change any op and rerun
+
+    When *emit_cuda_stubs* is True and *uniquify* is True, CUDA C++ kernel
+    templates are generated for each shared layer function.  To activate a
+    CUDA kernel, uncomment the ``load_cuda`` call in the function body and
+    fill in the C++ implementation.
     """
     out = Path(output_path)
     buf = StringIO()
@@ -2984,6 +2996,7 @@ def export_aten_program(
     # This is a PyTorch-level side effect — there is no way to undo it.
     fw_code = None
     unique_fn_defs: list[str] = []
+    unique_groups_out: list[_UniqueGroup] = []
     if capture.forward_graphs:
         fg = capture.forward_graphs[0]
         fw_code = export_graph_to_python(
@@ -2998,6 +3011,7 @@ def export_aten_program(
             kernel_map=kernel_map,
             uniquify=uniquify,
             _unique_fn_defs=unique_fn_defs,
+            _unique_groups=unique_groups_out,
         )
 
     bw_code = None
@@ -3155,6 +3169,51 @@ def export_aten_program(
                 buf.write(f"{name} = {name}.to(_device)\n")
     buf.write("\n\n")
 
+    # ── CUDA kernel stubs (optional) ─────────────────────────────
+    cuda_fn_toggle: dict[str, str] = {}  # fn_name -> commented-out CUDA call lines
+    if emit_cuda_stubs and unique_groups_out:
+        from torch_graph.cuda_inline import cuda_kernel_template
+
+        buf.write("# " + "=" * 70 + "\n")
+        buf.write("# CUDA KERNEL SOURCES\n")
+        buf.write("# " + "=" * 70 + "\n")
+        buf.write("# Auto-generated C++ ATen implementations for each shared layer.\n")
+        buf.write("# To switch a layer to CUDA: uncomment the 4 lines at the top of\n")
+        buf.write("# its function body and comment out the aten ops below them.\n")
+        buf.write("# First run compiles (~10-30s), then cached on disk.\n")
+        buf.write("# " + "=" * 70 + "\n\n")
+        buf.write("from torch_graph.cuda_inline import load_cuda\n\n")
+
+        for group in unique_groups_out:
+            cuda_var = f"_{group.fn_name.upper()}_CUDA"
+            mod_var = f"_{group.fn_name}_cuda_mod"
+            cpp_fn = f"fused_{group.fn_name}"
+
+            # Generate C++ template with working body from aten ops
+            cuda_src = cuda_kernel_template(
+                group.fn_name, group.params, group.returns,
+                body_code=group.body_code,
+            )
+            buf.write(f'{cuda_var} = r"""\n')
+            buf.write(cuda_src)
+            buf.write('"""\n\n')
+
+            buf.write(f"{mod_var} = None\n\n")
+
+            # Build the commented-out toggle lines to embed in the function body
+            param_names = ", ".join(p["name"] for p in group.params)
+            toggle_lines = []
+            toggle_lines.append(f"    # ── CUDA kernel (uncomment to activate) ──")
+            toggle_lines.append(f"    # global {mod_var}")
+            toggle_lines.append(f"    # if {mod_var} is None:")
+            toggle_lines.append(f'    #     {mod_var} = load_cuda("{group.fn_name}", {cuda_var}, ["{cpp_fn}"])')
+            if len(group.returns) <= 1:
+                toggle_lines.append(f"    # return ({mod_var}.{cpp_fn}({param_names}),)")
+            else:
+                toggle_lines.append(f"    # return {mod_var}.{cpp_fn}({param_names})")
+            toggle_lines.append(f"    # ──────────────────────────────────────────")
+            cuda_fn_toggle[group.fn_name] = "\n".join(toggle_lines)
+
     # ── Shared layer functions (uniquified) ──────────────────────
     if unique_fn_defs:
         buf.write("# " + "=" * 70 + "\n")
@@ -3163,7 +3222,26 @@ def export_aten_program(
         buf.write("# Repeated module groups extracted into reusable functions.\n")
         buf.write("# Edit once — changes apply to all instances.\n")
         buf.write("# " + "=" * 70 + "\n\n")
-        for fn_def in unique_fn_defs:
+        for i, fn_def in enumerate(unique_fn_defs):
+            # If CUDA stubs are enabled, inject the toggle into the function body
+            if i < len(unique_groups_out) and unique_groups_out[i].fn_name in cuda_fn_toggle:
+                group = unique_groups_out[i]
+                toggle = cuda_fn_toggle[group.fn_name]
+                # Insert the toggle right after the signature line(s)
+                fn_lines = fn_def.split("\n")
+                # Find the end of the signature (the line with just ")")  or "):" pattern
+                insert_idx = 0
+                for j, fl in enumerate(fn_lines):
+                    s = fl.strip()
+                    if s.startswith(")") and ("-> tuple" in s or s == "):"):
+                        insert_idx = j + 1
+                        break
+                    if s.endswith("):") or s.endswith("]:"):
+                        insert_idx = j + 1
+                        break
+                if insert_idx > 0:
+                    fn_lines.insert(insert_idx, toggle)
+                    fn_def = "\n".join(fn_lines)
             buf.write(fn_def)
             buf.write("\n\n")
 

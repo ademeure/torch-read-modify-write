@@ -77,6 +77,8 @@ def main():
                         help="Offload saved tensors to CPU during capture to reduce GPU memory usage")
     parser.add_argument("--use-inductor", action="store_true",
                         help="Use Inductor backend instead of aot_eager for capture")
+    parser.add_argument("--compile-aten", action="store_true",
+                        help="torch.compile the loaded aten forward/backward for Triton fusion")
     args = parser.parse_args(our_args)
 
     if not args.script and not args.module:
@@ -107,6 +109,7 @@ def main():
         capture_batch_size=args.capture_batch_size,
         offload_saved=args.offload_saved,
         use_inductor=args.use_inductor,
+        compile_aten=args.compile_aten,
     )
     # auto_install.patch() is called on import, torch.compile is already patched.
 

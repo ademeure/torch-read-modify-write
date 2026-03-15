@@ -103,7 +103,7 @@ canvas {{ display: block; }}
     <div class="toggle-row"><input type="checkbox" id="showParamEdges"><label for="showParamEdges">Show parameter edges</label></div>
     <div class="toggle-row"><input type="checkbox" id="mergeTransposeMatmul" checked><label for="mergeTransposeMatmul">Merge transpose into matmul</label></div>
     <div class="toggle-row"><input type="checkbox" id="hideTransposes"><label for="hideTransposes">Hide transposes and splits</label></div>
-    <div class="toggle-row" id="kernelColorRow" style="display:none"><input type="checkbox" id="colorByKernel"><label for="colorByKernel">Color by kernel</label></div>
+    <div class="toggle-row" id="kernelColorRow" style="display:none"><input type="checkbox" id="colorByKernel"><label for="colorByKernel">Color by Triton kernel</label></div>
     <h2 id="sidebar-title">Node Inspector</h2>
     <div id="node-info"><p style="color:#8b949e;font-size:12px;">Click a node to inspect it</p></div>
     <div id="groups-panel"></div>
@@ -161,8 +161,16 @@ let activeGraph = 'forward';
 
 // Show tabs only if backward graph exists
 if (BW_DATA) document.getElementById('graph-tabs').style.display = 'block';
-document.getElementById('stats').textContent = FW_DATA.numParams + ' params | ' + FW_DATA.numCompute + ' ops';
-if (KERNEL_GROUPS.length > 0) document.getElementById('kernelColorRow').style.display = 'flex';
+let statsText = FW_DATA.numParams + ' params | ' + FW_DATA.numCompute + ' ops';
+if (KERNEL_GROUPS.length > 0) {{
+  const nTriton = KERNEL_GROUPS.filter(k => k.type !== 'extern' && k.type !== 'native').length;
+  const nExtern = KERNEL_GROUPS.filter(k => k.type === 'extern').length;
+  statsText += ` | ${{KERNEL_GROUPS.length}} kernels (${{nTriton}} Triton, ${{nExtern}} cuBLAS)`;
+  document.getElementById('kernelColorRow').style.display = 'flex';
+  // Auto-enable color by kernel (JS variable synced after declaration below)
+  document.getElementById('colorByKernel').checked = true;
+}}
+document.getElementById('stats').textContent = statsText;
 
 const canvas = document.getElementById('canvas');
 const ctx = canvas.getContext('2d');
@@ -191,7 +199,7 @@ let highlightedGroupKey = null; // 'line:N' to track which line group is highlig
 let hoveredLineNodes = null;    // Set of node IDs when hovering a line group in sidebar
 let hoveredModuleNodes = null;  // Set of node IDs when hovering a module group (canvas or sidebar)
 let _nodeModuleGrp = {{}};      // node id → module group index (populated by layout, includes propagated)
-let colorByKernel = false;
+let colorByKernel = KERNEL_GROUPS.length > 0;
 
 // Assign stable hue per kernel for "color by kernel" mode
 const kernelColors = {{}};
@@ -591,6 +599,16 @@ function layout() {{
     g._w = Math.max(...gnodes.map(n => n.x + n.w)) - g._x + 10;
     g._h = Math.max(...gnodes.map(n => n.y + n.h)) - g._y + 10;
   }});
+  // Compute kernel group bounding boxes
+  KERNEL_GROUPS.forEach(g => {{
+    const gnodes = g.nodes.map(id => NODES[id]).filter(n => n && n._visible && !n.isParam && !pcSet.has(n.id));
+    if (gnodes.length === 0) {{ g._visible = false; return; }}
+    g._visible = true;
+    g._x = Math.min(...gnodes.map(n => n.x)) - 8;
+    g._y = Math.min(...gnodes.map(n => n.y)) - 16;
+    g._w = Math.max(...gnodes.map(n => n.x + n.w)) - g._x + 8;
+    g._h = Math.max(...gnodes.map(n => n.y + n.h)) - g._y + 8;
+  }});
 }}
 layout();
 
@@ -784,6 +802,29 @@ function draw() {{
       ctx.textAlign = 'left';
       const label = g.name.length > 60 ? g.name.slice(0, 58) + '..' : g.name;
       ctx.fillText(label, g._x + 8, g._y + 12);
+    }});
+  }}
+
+  // Draw kernel group outlines when "Color by kernel" is active
+  if (colorByKernel && KERNEL_GROUPS.length > 0 && !isolatedGroupNodes) {{
+    KERNEL_GROUPS.forEach((g, gi) => {{
+      if (!g._visible) return;
+      const kc = kernelColors[g.name] || '#8b949e';
+      ctx.strokeStyle = kc + '50';
+      ctx.lineWidth = 1.5;
+      ctx.setLineDash([4, 3]);
+      ctx.beginPath();
+      ctx.roundRect(g._x, g._y, g._w, g._h, 6);
+      ctx.stroke();
+      ctx.setLineDash([]);
+      // Label at top
+      ctx.fillStyle = kc + '90';
+      ctx.font = '8px sans-serif';
+      ctx.textAlign = 'left';
+      const ktl = g.type === 'extern' ? '\u25a0 ' : '\u25b2 ';
+      const shortN = g.name.replace(/^triton_\w+?_fused_/, '').replace(/^extern_kernels\./, 'ext:');
+      const kLabel = shortN.length > 40 ? shortN.slice(0, 38) + '..' : shortN;
+      ctx.fillText(ktl + kLabel, g._x + 4, g._y + 10);
     }});
   }}
 
@@ -1011,9 +1052,18 @@ function buildGroupSection(title, groups, type) {{
   groups.forEach((g, i) => {{
     let label, fullTitle;
     if (type === 'kernel') {{
-      const ktype = g.type === 'extern' ? ' [cuBLAS]' : g.type === 'native' ? ' [CUDA]' : '';
-      label = `<span style="color:#8b949e">${{_esc(g.name)}}</span><span style="color:#484f58">${{_esc(ktype)}}</span>`;
-      fullTitle = g.name + ktype;
+      const kcolor = kernelColors[g.name] || '#8b949e';
+      const ktypeLabel = g.type === 'extern' ? 'cuBLAS' : g.type === 'native' ? 'CUDA' : 'Triton';
+      const ktypeBg = g.type === 'extern' ? '#da3633' : g.type === 'native' ? '#d29922' : '#238636';
+      const opsPreview = (g.atenOps && g.atenOps.length > 0)
+        ? g.atenOps.slice(0, 3).map(o => o.replace('aten.', '')).join('+') + (g.atenOps.length > 3 ? '+\u2026' : '')
+        : '';
+      // Short name: strip common prefix for readability
+      const shortName = g.name.replace(/^triton_\w+?_fused_/, '').replace(/^extern_kernels\./, 'ext:');
+      label = `<span class="op-badge" style="background:${{ktypeBg}}30;color:${{ktypeBg}};font-size:9px;padding:1px 5px;margin-right:4px">${{ktypeLabel}}</span>`
+        + `<span style="color:${{kcolor}}">${{_esc(shortName)}}</span>`
+        + (opsPreview ? ` <span style="color:#484f58;font-size:10px">${{_esc(opsPreview)}}</span>` : '');
+      fullTitle = g.name + ' [' + ktypeLabel + '] — ' + (g.atenOps || []).join(', ');
     }} else if (type === 'line' && g.code) {{
       label = `<span style="color:#58a6ff">${{_esc(g.name)}}</span> <span style="color:#636da6">${{_esc(g.code)}}</span>`;
       fullTitle = g.name + ' ' + g.code;
@@ -1218,7 +1268,12 @@ canvas.addEventListener('mousemove', e => {{
       if (n.meta.shape) lines += `\n<span class="tt-label">Shape:</span> <span class="tt-val">${{_esc(n.meta.shape)}}</span>`;
       if (n.meta.dtype) lines += `\n<span class="tt-label">Dtype:</span> <span class="tt-val">${{_esc(n.meta.dtype)}}</span>`;
       if (si.sourceFn) lines += `\n<span class="tt-label">Source:</span> <span class="tt-val">${{_esc(si.sourceFn)}}</span>`;
-      if (n.kernelGroup) lines += `\n<span class="tt-label">Kernel:</span> <span class="tt-val">${{_esc(n.kernelGroup)}}</span>`;
+      if (n.kernelGroup) {{
+        const _kg = KERNEL_GROUPS.find(k => k.name === n.kernelGroup);
+        const _kt = _kg ? (_kg.type === 'extern' ? ' [cuBLAS]' : _kg.type === 'native' ? ' [CUDA]' : ' [Triton]') : '';
+        const _kops = _kg && _kg.atenOps ? ' \u2014 ' + _kg.atenOps.slice(0,3).map(o => o.replace('aten.','')).join('+') : '';
+        lines += `\n<span class="tt-label">Kernel:</span> <span class="tt-val">${{_esc(n.kernelGroup)}}${{_kt}}${{_kops}}</span>`;
+      }}
       tt.innerHTML = lines;
       tt.style.display = 'block';
       const tx = Math.min(e.clientX + 14, window.innerWidth - tt.offsetWidth - 10);
@@ -1311,12 +1366,27 @@ function showNodeInfo(node, groupType) {{
   if (node.kernelGroup) {{
     const kcolor = kernelColors[node.kernelGroup] || '#58a6ff';
     const kg = KERNEL_GROUPS.find(k => k.name === node.kernelGroup);
-    html += `<h3>Triton Kernel</h3>`;
+    const ktypeLabel = kg ? (kg.type === 'extern' ? 'cuBLAS' : kg.type === 'native' ? 'CUDA' : 'Triton') : '';
+    const ktypeBg = kg ? (kg.type === 'extern' ? '#da3633' : kg.type === 'native' ? '#d29922' : '#238636') : '#58a6ff';
+    html += `<h3>Kernel Fusion</h3>`;
     html += `<div class="info-row"><span class="info-label">Kernel</span><span class="op-badge" style="background:${{kcolor}}30;color:${{kcolor}}">${{_esc(node.kernelGroup)}}</span></div>`;
     if (kg) {{
-      if (kg.type) html += `<div class="info-row"><span class="info-label">Type</span><span class="info-value">${{_esc(kg.type)}}</span></div>`;
-      if (kg.atenOps && kg.atenOps.length) html += `<div class="info-row"><span class="info-label">Fused ops</span><span class="info-value">${{_esc(kg.atenOps.join(', '))}}</span></div>`;
-      html += `<div class="info-row"><span class="info-label">Nodes</span><span class="info-value">${{kg.nodes.length}} aten ops fused</span></div>`;
+      html += `<div class="info-row"><span class="info-label">Type</span><span class="op-badge" style="background:${{ktypeBg}}30;color:${{ktypeBg}};font-size:10px">${{ktypeLabel}}</span></div>`;
+      if (kg.atenOps && kg.atenOps.length) {{
+        html += `<div class="info-row"><span class="info-label">Fused ops</span><span class="info-value">${{_esc(kg.atenOps.map(o => o.replace('aten.', '')).join(', '))}}</span></div>`;
+      }}
+      html += `<div class="info-row"><span class="info-label">Fusion</span><span class="info-value">${{kg.nodes.length}} aten ops \u2192 1 kernel</span></div>`;
+      // Clickable link to isolate this kernel's nodes
+      const kIdx = KERNEL_GROUPS.indexOf(kg);
+      if (kIdx >= 0) {{
+        html += `<div style="margin:4px 0"><a href="#" onclick="event.preventDefault();toggleIsolate('kernel',${{kIdx}})" style="color:#58a6ff;font-size:11px;text-decoration:none">\u25b6 Isolate this kernel's nodes</a></div>`;
+      }}
+      // Expandable source code
+      if (kg.sourceCode) {{
+        const codeId = 'kernel-src-' + kIdx;
+        html += `<div style="margin-top:6px"><a href="#" onclick="event.preventDefault();var el=document.getElementById('${{codeId}}');el.style.display=el.style.display==='none'?'block':'none'" style="color:#58a6ff;font-size:11px;text-decoration:none">\u25b6 View kernel source (${{kg.sourceCode.split('\\n').length}} lines)</a>`;
+        html += `<pre id="${{codeId}}" style="display:none;margin-top:4px;padding:8px;background:#0d1117;border:1px solid #30363d;border-radius:6px;font-size:10px;color:#c9d1d9;max-height:300px;overflow:auto;white-space:pre-wrap;word-break:break-all">${{_esc(kg.sourceCode)}}</pre></div>`;
+      }}
     }}
   }}
 

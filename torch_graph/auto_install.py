@@ -127,6 +127,11 @@ class AutoInstallConfig:
     # CPU↔GPU transfers, but allows capturing models that otherwise OOM.
     offload_saved: bool = False
 
+    # Compile the loaded aten forward/backward with torch.compile(backend="inductor")
+    # so that Inductor fuses aten ops into Triton kernels on first call.
+    # Edit the .py file → next run recompiles with your changes → Triton speed.
+    compile_aten: bool = False
+
     # Auto-capture optimizer.step() via patching torch.optim.Optimizer.step.
     # On first optimizer.step() call, captures aten graph and saves to disk.
     # Set False to skip optimizer capture entirely.
@@ -953,6 +958,7 @@ class _CompiledModelProxy:
             mutated_buffers=mutated_buffers,
             validate=False,
             user_input_order=user_input_order,
+            compile=_config.compile_aten,
         )
 
     def _capture_variant(self, key, args, kwargs, cache_path: Path, *,
@@ -1232,6 +1238,9 @@ class _CompiledFnProxy:
         forward_fn = self._find_forward_in_module(aten_mod)
         if forward_fn is None:
             return None
+
+        if _config.compile_aten:
+            forward_fn = torch.compile(forward_fn, backend="inductor")
 
         meta = _read_meta(cache_path)
         num_mutations = meta.get("num_mutations", 0)

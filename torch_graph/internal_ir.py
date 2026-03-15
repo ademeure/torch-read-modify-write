@@ -36,6 +36,55 @@ def tensor_meta(val: Any) -> dict[str, Any] | None:
     return None
 
 
+# Targets considered "plumbing" — reshape/index/alias without real compute.
+# Mirrors _VIEW_TARGETS in op_dump.py.
+_VIEW_TARGETS = frozenset({
+    "view", "reshape", "permute", "transpose", "expand", "contiguous",
+    "unsqueeze", "squeeze", "slice", "select", "split", "unbind", "chunk",
+    "narrow", "as_strided", "alias", "detach", "clone", "t", "flatten",
+    "getitem",
+})
+
+
+def _is_view_node(node: Node) -> bool:
+    """Return True if *node* is a view/reshape/index plumbing op."""
+    if node.op not in ("call_function", "call_method"):
+        return False
+    target = callable_to_str(node.target) if node.op == "call_function" else str(node.target)
+    # callable_to_str returns e.g. "aten.t", "aten.squeeze.dim", "operator.getitem"
+    parts = target.lower().split(".")
+    # For "aten.<op>" or "aten.<op>.<overload>", the op name is parts[1].
+    # For "operator.getitem", it's parts[-1].
+    if len(parts) >= 2 and parts[0] == "aten":
+        op_name = parts[1]
+    else:
+        op_name = parts[-1]
+    return op_name in _VIEW_TARGETS
+
+
+def _stride_comment(node: Node) -> str:
+    """Return a trailing comment with strides, contiguity, and view flag."""
+    val = node.meta.get("val")
+    view = _is_view_node(node)
+
+    if isinstance(val, torch.Tensor):
+        strides = tuple(val.stride())
+        contig = val.is_contiguous()
+        return f"  # strides={strides}, contiguous={contig}, view={view}"
+    if isinstance(val, (tuple, list)):
+        parts = []
+        for i, v in enumerate(val):
+            if isinstance(v, torch.Tensor):
+                strides = tuple(v.stride())
+                contig = v.is_contiguous()
+                parts.append(f"out{i}: strides={strides}, contiguous={contig}")
+        if parts:
+            return "  # " + "; ".join(parts) + f", view={view}"
+    if view:
+        return f"  # view={view}"
+    return ""
+
+
 def placeholder_annotation(node: Node) -> str:
     """Return the exported placeholder type annotation string."""
     meta = tensor_meta(node.meta.get("val"))
@@ -396,7 +445,8 @@ def fx_node_to_python(node: Node, graph_module: GraphModule | None = None) -> st
     kwargs_strs = [f"{k}={ir_value_to_python(value_to_ir(v))}" for k, v in node.kwargs.items()]
     all_args = ", ".join(args_strs + kwargs_strs)
 
-    meta = tensor_meta(node.meta.get("val"))
+    val = node.meta.get("val")
+    meta = tensor_meta(val)
     type_annotation = ""
     if meta:
         type_annotation = f": '{meta['dtype'].split('.')[-1]}[{', '.join(str(s) for s in meta['shape'])}]'"
@@ -445,6 +495,7 @@ def graph_to_ir(
                 "kwargs": {k: value_to_ir(v) for k, v in node.kwargs.items()},
                 "meta": tensor_meta(node.meta.get("val")) or {},
                 "python": fx_node_to_python(node, graph_module),
+                "stride_comment": _stride_comment(node),
             }
         )
 

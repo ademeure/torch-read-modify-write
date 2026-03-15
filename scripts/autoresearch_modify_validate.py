@@ -3,7 +3,7 @@
 
 Three tests:
   1. Baseline: run captured aten graph, record loss
-  2. Break: zero out the first residual add → loss should change dramatically
+  2. Break: zero out WTE embeddings → loss should change dramatically
   3. CUDA kernel: replace an aten.add with an inline CUDA kernel → loss should match baseline
 
 Usage:
@@ -12,13 +12,9 @@ Usage:
 
 from __future__ import annotations
 
-import copy
 import importlib
 import os
-import re
-import shutil
 import sys
-import time
 import types
 from pathlib import Path
 

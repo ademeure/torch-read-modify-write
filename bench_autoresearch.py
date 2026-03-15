@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Performance benchmark for autoresearch (FA3 GPT with MuonAdamW).
+"""Performance benchmark for autoresearch (SDPA/FA3 GPT with MuonAdamW).
 
 Modes:
   eager          - vanilla PyTorch (no compile), with bf16 autocast

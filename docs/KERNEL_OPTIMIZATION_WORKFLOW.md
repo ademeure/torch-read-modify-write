@@ -411,8 +411,8 @@ optimization targets based on the captured graph:
    fusible into a single Triton kernel
 2. **Residual + RMSNorm**: `add + _fused_rms_norm` — fuse the residual add
    with the subsequent normalization
-3. **ReGLU activation**: `mm + relu + square + mm` — fuse the nonlinearity
-   with the matmul output
+3. **Squared ReLU + MLP**: `mm + relu + square + mm` — fuse the nonlinearity
+   with the surrounding matmuls
 
 ## File reference
 

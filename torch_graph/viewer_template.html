@@ -1,0 +1,1587 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<title>{title}</title>
+<style>
+* {{ margin: 0; padding: 0; box-sizing: border-box; }}
+body {{ font-family: 'Segoe UI', system-ui, sans-serif; background: #0d1117; color: #c9d1d9; }}
+#outer {{ display: flex; height: 100vh; }}
+#container {{ display: flex; flex: 1; min-width: 0; min-height: 0; }}
+#graph-panel {{ flex: 1; position: relative; overflow: hidden; }}
+canvas {{ display: block; }}
+#sidebar {{ width: 530px; background: #161b22; border-left: 1px solid #30363d;
+            overflow-y: auto; padding: 16px; flex-shrink: 0; }}
+#sidebar h2 {{ color: #58a6ff; margin-bottom: 8px; font-size: 14px; }}
+#sidebar h3 {{ color: #8b949e; margin: 10px 0 4px; font-size: 11px; text-transform: uppercase; letter-spacing: 0.5px; }}
+.info-row {{ display: flex; justify-content: space-between; padding: 3px 0;
+             font-size: 12px; border-bottom: 1px solid #21262d; }}
+.info-label {{ color: #8b949e; flex-shrink: 0; }}
+.info-value {{ color: #c9d1d9; font-family: 'SF Mono', monospace; font-size: 11px; text-align: right; word-break: break-all; }}
+.op-badge {{ display: inline-block; padding: 2px 8px; border-radius: 12px; font-size: 11px; font-weight: 600; }}
+#search {{ width: 100%; padding: 8px 12px; background: #0d1117; border: 1px solid #30363d;
+           border-radius: 6px; color: #c9d1d9; font-size: 13px; margin-bottom: 8px; }}
+#search:focus {{ border-color: #58a6ff; outline: none; }}
+.toggle-row {{ display: flex; align-items: center; gap: 8px; padding: 4px 0; font-size: 12px; cursor: pointer; }}
+.toggle-row:hover {{ color: #58a6ff; }}
+.toggle-row input {{ cursor: pointer; }}
+#stats {{ color: #8b949e; font-size: 11px; margin-bottom: 8px; }}
+.legend-item {{ display: flex; align-items: center; gap: 8px; padding: 2px 0; font-size: 11px; }}
+.legend-dot {{ width: 10px; height: 10px; border-radius: 50%; flex-shrink: 0; }}
+.toolbar {{ position: absolute; bottom: 10px; left: 10px; display: flex; gap: 6px; z-index: 10; }}
+.toolbar button {{ padding: 6px 14px; background: #21262d; border: 1px solid #30363d; color: #c9d1d9;
+                   border-radius: 6px; cursor: pointer; font-size: 12px; }}
+.toolbar button:hover {{ background: #30363d; }}
+.toolbar button.active {{ background: #1f6feb; border-color: #58a6ff; }}
+#help {{ position: absolute; top: 10px; left: 10px; padding: 4px 10px;
+         background: #21262d99; border: 1px solid #30363d; color: #8b949e;
+         border-radius: 6px; font-size: 10px; z-index: 10; pointer-events: none; }}
+.source-group {{ padding: 3px 8px; background: #21262d; border-bottom: 1px solid #161b22;
+                 font-size: 11px; font-family: monospace; color: #8b949e; cursor: pointer;
+                 overflow: hidden; white-space: nowrap; text-overflow: ellipsis; }}
+.source-group:first-child {{ border-radius: 4px 4px 0 0; }}
+.source-group:last-child {{ border-radius: 0 0 4px 4px; border-bottom: none; }}
+.source-group:hover {{ color: #58a6ff; background: #1c2333; }}
+.source-group.node-match {{ background: #1c233388; box-shadow: inset 2px 0 0 #58a6ff40; }}
+.source-group.isolated {{ background: #1f6feb; color: #fff; }}
+#canvas-tooltip {{ position: fixed; pointer-events: none; z-index: 1000;
+                   background: #1c2128; border: 1px solid #444c56; border-radius: 6px;
+                   padding: 6px 10px; font-size: 11px; color: #e6edf3; font-family: 'SF Mono', monospace;
+                   max-width: 420px; white-space: pre-wrap; word-break: break-all;
+                   box-shadow: 0 4px 12px rgba(0,0,0,0.4); display: none; }}
+#canvas-tooltip .tt-label {{ color: #8b949e; font-size: 10px; }}
+#canvas-tooltip .tt-val {{ color: #e6edf3; }}
+.group-header {{ cursor: pointer; display: flex; align-items: center; gap: 6px; user-select: none; }}
+.group-header:hover {{ color: #58a6ff; }}
+.group-toggle {{ font-size: 9px; color: #8b949e; transition: transform 0.15s; display: inline-block; }}
+.group-toggle.open {{ transform: rotate(90deg); }}
+.group-list {{ }}
+.graph-tab {{ display: inline-block; padding: 4px 12px; font-size: 12px; cursor: pointer;
+              background: #21262d; border: 1px solid #30363d; color: #8b949e; }}
+.graph-tab:first-child {{ border-radius: 6px 0 0 6px; }}
+.graph-tab:last-child {{ border-radius: 0 6px 6px 0; border-left: none; }}
+.graph-tab.active {{ background: #1f6feb; color: #fff; border-color: #58a6ff; }}
+.graph-tab:hover:not(.active) {{ background: #30363d; color: #c9d1d9; }}
+#graph-tabs {{ display: none; margin-bottom: 8px; }}
+#h5web-drag {{ width: 5px; background: #30363d; cursor: ew-resize; flex-shrink: 0; display: none; }}
+#h5web-drag:hover {{ background: #58a6ff; }}
+#h5web-panel {{ display: none; flex-shrink: 0; background: #0d1117;
+               position: relative; overflow: hidden; }}
+#h5web-toolbar {{ display: flex; align-items: center; gap: 8px; padding: 4px 8px;
+                  background: #161b22; border-bottom: 1px solid #30363d; font-size: 11px; }}
+#h5web-toolbar label {{ color: #8b949e; cursor: pointer; white-space: nowrap; }}
+#h5web-toolbar .h5w-status {{ color: #8b949e; font-size: 11px; margin-left: auto; white-space: nowrap; }}
+#h5web-toolbar .h5w-status.ok {{ color: #3fb950; }}
+#h5web-toolbar .h5w-status.err {{ color: #f85149; }}
+#h5web-toolbar .h5w-nav {{ color: #58a6ff; font-family: 'SF Mono', monospace; font-size: 11px;
+                           overflow: hidden; text-overflow: ellipsis; white-space: nowrap; max-width: 280px; }}
+#h5web-root {{ height: calc(100% - 33px); }}
+</style>
+</head>
+<body>
+<div id="outer">
+<div id="container">
+  <div id="graph-panel">
+    <canvas id="canvas"></canvas>
+    <div id="help">Scroll: zoom | Drag: pan | Click: inspect | P: params | S: sidebar | H: h5web | Esc: exit isolation</div>
+    <div class="toolbar">
+      <button onclick="fitView()">Fit View</button>
+      <button onclick="zoomIn()">+</button>
+      <button onclick="zoomOut()">&minus;</button>
+      <button id="btn-sidebar" class="active" onclick="toggleSidebar()">Sidebar</button>
+      <button id="btn-h5web" style="display:none" onclick="toggleH5Panel()">H5Web</button>
+    </div>
+  </div>
+  <div id="sidebar">
+    <div id="graph-tabs"><span class="graph-tab active" data-graph="forward" onclick="switchGraph('forward')">Forward</span><span class="graph-tab" data-graph="backward" onclick="switchGraph('backward')">Backward</span></div>
+    <input id="search" type="text" placeholder="Search nodes (name, op, target)...">
+    <div id="stats"></div>
+    <div class="toggle-row"><input type="checkbox" id="simplifiedView" checked><label for="simplifiedView">Simplified view</label></div>
+    <div class="toggle-row"><input type="checkbox" id="hideOutput" checked><label for="hideOutput">Hide output node</label></div>
+    <div class="toggle-row"><input type="checkbox" id="showGroups" checked><label for="showGroups">Show module groups</label></div>
+    <div class="toggle-row"><input type="checkbox" id="showParams"><label for="showParams">Show parameter nodes</label></div>
+    <div class="toggle-row"><input type="checkbox" id="showParamEdges"><label for="showParamEdges">Show parameter edges</label></div>
+    <div class="toggle-row"><input type="checkbox" id="mergeTransposeMatmul" checked><label for="mergeTransposeMatmul">Merge transpose into matmul</label></div>
+    <div class="toggle-row"><input type="checkbox" id="hideTransposes"><label for="hideTransposes">Hide transposes and splits</label></div>
+    <div class="toggle-row" id="kernelColorRow" style="display:none"><input type="checkbox" id="colorByKernel"><label for="colorByKernel">Color by kernel</label></div>
+    <h2 id="sidebar-title">Node Inspector</h2>
+    <div id="node-info"><p style="color:#8b949e;font-size:12px;">Click a node to inspect it</p></div>
+    <div id="groups-panel"></div>
+    <div id="legend" style="margin-top:12px;">
+      <h3>Op Categories</h3>
+      <div class="legend-item"><div class="legend-dot" style="background:#FF6B6B"></div> Matrix (matmul, linear)</div>
+      <div class="legend-item"><div class="legend-dot" style="background:#9ECE6A"></div> Activation (relu, gelu)</div>
+      <div class="legend-item"><div class="legend-dot" style="background:#E0AF68"></div> Normalization</div>
+      <div class="legend-item"><div class="legend-dot" style="background:#BB9AF7"></div> Elementwise (add, mul)</div>
+      <div class="legend-item"><div class="legend-dot" style="background:#F7768E"></div> Attention (softmax)</div>
+      <div class="legend-item"><div class="legend-dot" style="background:#43D9AD"></div> Embedding</div>
+      <div class="legend-item"><div class="legend-dot" style="background:#FF9E64"></div> Reduction (sum, mean)</div>
+      <div class="legend-item"><div class="legend-dot" style="background:#636DA6"></div> Shape (view, reshape)</div>
+      <div class="legend-item"><div class="legend-dot" style="background:#8B8B8B"></div> Other</div>
+    </div>
+  </div>
+</div>
+<div id="h5web-drag"></div>
+<div id="h5web-panel">
+  <div id="h5web-toolbar">
+    <label>H5Web Tensor Viewer</label>
+    <input type="file" id="h5web-file" accept=".h5,.hdf5,.hdf,.nxs,.nx5" style="display:none">
+    <button onclick="document.getElementById('h5web-file').click()" style="padding:2px 10px;background:#21262d;border:1px solid #30363d;color:#c9d1d9;border-radius:4px;cursor:pointer;font-size:11px;">Load H5</button>
+    <button id="h5pos-btn" onclick="cycleH5Position()" style="padding:2px 8px;background:#21262d;border:1px solid #30363d;color:#c9d1d9;border-radius:4px;cursor:pointer;font-size:11px;">&#9639; Left</button>
+    <span class="h5w-nav" id="h5web-nav"></span>
+    <span class="h5w-status" id="h5web-status"></span>
+  </div>
+  <div id="h5web-root"></div>
+</div>
+</div>
+<div id="canvas-tooltip"></div>
+<script>
+const FW_DATA = {fw_data_json};
+const BW_DATA = {bw_data_json};
+let NODES = FW_DATA.nodes;
+let EDGES = FW_DATA.edges;
+let GROUPS = FW_DATA.groups;
+let LINE_GROUPS = FW_DATA.lineGroups;
+let KERNEL_GROUPS = FW_DATA.kernelGroups || [];
+let CODE = FW_DATA.code;
+let _allHaveStats = NODES.length > 0 && NODES.every(n => n.stats);
+// Reverse lookups: node id → group index (for line and kernel groups)
+let _nodeToLine = {{}}, _nodeToKernel = {{}};
+function _buildGroupLookups() {{
+  _nodeToLine = {{}}; _nodeToKernel = {{}};
+  LINE_GROUPS.forEach((g, i) => g.nodes.forEach(nid => {{ if (_nodeToLine[nid] === undefined) _nodeToLine[nid] = i; }}));
+  KERNEL_GROUPS.forEach((g, i) => g.nodes.forEach(nid => {{ if (_nodeToKernel[nid] === undefined) _nodeToKernel[nid] = i; }}));
+}}
+_buildGroupLookups();
+// Display name helper: use human-readable displayName (e.g. "self.transformer.h.0.attn.c_k.weight") when available
+function _dn(n) {{ return n.displayName || n.name; }}
+// Escape HTML entities to prevent XSS when inserting graph data into innerHTML
+function _esc(s) {{ if (s == null) return ''; return String(s).replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;').replace(/"/g,'&quot;'); }}
+let activeGraph = 'forward';
+
+// Show tabs only if backward graph exists
+if (BW_DATA) document.getElementById('graph-tabs').style.display = 'block';
+document.getElementById('stats').textContent = FW_DATA.numParams + ' params | ' + FW_DATA.numCompute + ' ops';
+if (KERNEL_GROUPS.length > 0) document.getElementById('kernelColorRow').style.display = 'flex';
+
+const canvas = document.getElementById('canvas');
+const ctx = canvas.getContext('2d');
+let W, H;
+function resize() {{
+  const panel = document.getElementById('graph-panel');
+  W = canvas.width = panel.clientWidth;
+  H = canvas.height = panel.clientHeight;
+}}
+resize();
+window.addEventListener('resize', () => {{ resize(); draw(); }});
+
+// Settings
+let showParams = false;
+let showParamEdges = false;
+let showGroups = true;
+let simplifiedView = true;
+let hideTransposes = false;
+let mergeTransposeMatmul = true;
+let hideOutput = true;
+let drawEdges = EDGES;
+let isolatedGroupNodes = null;  // Set of node IDs when a module group is isolated
+let isolatedGroupKey = null;    // 'module:N' to track which module group is active
+let highlightedNodes = null;    // Set of node IDs when a line group is highlighted
+let highlightedGroupKey = null; // 'line:N' to track which line group is highlighted
+let hoveredLineNodes = null;    // Set of node IDs when hovering a line group in sidebar
+let hoveredModuleNodes = null;  // Set of node IDs when hovering a module group (canvas or sidebar)
+let _nodeModuleGrp = {{}};      // node id → module group index (populated by layout, includes propagated)
+let colorByKernel = false;
+
+// Assign stable hue per kernel for "color by kernel" mode
+const kernelColors = {{}};
+KERNEL_GROUPS.forEach((kg, i) => {{
+  const hue = (i * 137.508) % 360;
+  kernelColors[kg.name] = `hsl(${{hue}}, 70%, 55%)`;
+}});
+// Build node-to-kernel-color lookup
+const nodeKernelColor = {{}};
+NODES.forEach(n => {{
+  if (n.kernelGroup && kernelColors[n.kernelGroup]) {{
+    nodeKernelColor[n.id] = kernelColors[n.kernelGroup];
+  }}
+}});
+
+document.getElementById('showParams').addEventListener('change', e => {{ showParams = e.target.checked; layout(); draw(); }});
+document.getElementById('showParamEdges').addEventListener('change', e => {{ showParamEdges = e.target.checked; draw(); }});
+document.getElementById('showGroups').addEventListener('change', e => {{ showGroups = e.target.checked; draw(); }});
+document.getElementById('simplifiedView').addEventListener('change', e => {{ simplifiedView = e.target.checked; layout(); draw(); }});
+document.getElementById('hideTransposes').addEventListener('change', e => {{ hideTransposes = e.target.checked; layout(); draw(); }});
+document.getElementById('mergeTransposeMatmul').addEventListener('change', e => {{ mergeTransposeMatmul = e.target.checked; layout(); draw(); }});
+document.getElementById('hideOutput').addEventListener('change', e => {{ hideOutput = e.target.checked; layout(); draw(); }});
+document.getElementById('colorByKernel').addEventListener('change', e => {{ colorByKernel = e.target.checked; draw(); }});
+document.addEventListener('keydown', e => {{
+  if (document.activeElement.tagName === 'INPUT') return;
+  if (e.key === 'p' && !e.ctrlKey) {{
+    showParams = !showParams;
+    document.getElementById('showParams').checked = showParams;
+    layout(); draw();
+  }}
+  if (e.key === 's' && !e.ctrlKey && !e.metaKey) toggleSidebar();
+  if (e.key === 'h' && !e.ctrlKey && !e.metaKey) toggleH5Panel();
+  if (e.key === 'Escape' && (isolatedGroupKey || highlightedGroupKey)) {{
+    const wasIsolated = !!isolatedGroupKey;
+    isolatedGroupNodes = null;
+    isolatedGroupKey = null;
+    highlightedNodes = null;
+    highlightedGroupKey = null;
+    updateGroupHighlight();
+    if (wasIsolated) {{ layout(); fitView(); }}
+    else draw();
+  }}
+}});
+
+const nodeW = 180, nodeH = 52, padX = 50, padY = 80;
+let layerBounds = [];
+
+function layout() {{
+  // Compute "param-chain" nodes: plumbing ops (transpose, reshape, etc.)
+  // whose ALL inputs trace back to params only. Hidden together with params.
+  const _inMap = {{}};
+  EDGES.forEach(e => {{ if (!_inMap[e.target]) _inMap[e.target] = []; _inMap[e.target].push(e.source); }});
+  const PLUMB = ['t.default','transpose','alias.default','view','reshape',
+    'permute','contiguous','clone','unsqueeze','squeeze','slice',
+    'expand','_to_copy','eq.Scalar'];
+  const pcSet = new Set(NODES.filter(n => n.isParam).map(n => n.id));
+  let _pc = true;
+  while (_pc) {{
+    _pc = false;
+    NODES.forEach(n => {{
+      if (pcSet.has(n.id) || n.op === 'output') return;
+      const ins = _inMap[n.id] || [];
+      if (ins.length > 0 && ins.every(s => pcSet.has(s))
+          && PLUMB.some(p => n.target.includes(p))) {{
+        pcSet.add(n.id); _pc = true;
+      }}
+    }});
+  }}
+  // Mark edges from param-chain nodes as param edges
+  EDGES.forEach(e => {{ if (pcSet.has(e.source)) e.isParamEdge = true; }});
+
+  let visible = NODES.filter(n => {{
+    if (hideOutput && n.op === 'output') return false;
+    if (!showParams && (n.isParam || pcSet.has(n.id))) return false;
+    return true;
+  }});
+  if (simplifiedView) {{
+    const PLUMBING = ['view', '.t.', 'permute', 'expand', 'contiguous', 'clone', 'slice', 'unsqueeze', 'squeeze', 'reshape', 'getitem', '_to_copy', 'detach'];
+    visible = visible.filter(n => n.isParam || n.op === 'output' || !PLUMBING.some(p => n.target.includes(p)));
+  }}
+  if (hideTransposes) {{
+    const TRANSPOSE = ['transpose', '.t.', 't.default', 'permute', 'split'];
+    visible = visible.filter(n => n.isParam || n.op === 'output' || !TRANSPOSE.some(p => n.target.includes(p)));
+  }}
+  NODES.forEach(n => {{ delete n._mergedTranspose; }});
+  if (mergeTransposeMatmul) {{
+    const outMap = {{}};
+    EDGES.forEach(e => {{ if (!outMap[e.source]) outMap[e.source] = []; outMap[e.source].push(e.target); }});
+    const M_TRANS = ['transpose', '.t.', 't.default', 'permute'];
+    const M_MATMUL = ['mm', 'bmm', 'matmul', 'addmm', 'linear'];
+    const toMerge = new Set();
+    visible.forEach(n => {{
+      if (n.isParam || n.op === 'output') return;
+      if (!M_TRANS.some(p => n.target.includes(p))) return;
+      const consumers = (outMap[n.id] || []).filter(tid => NODES[tid] && NODES[tid].op !== 'output');
+      if (consumers.length === 0) return;
+      if (consumers.every(tid => M_MATMUL.some(m => NODES[tid].target.includes(m)))) {{
+        toMerge.add(n.id);
+        consumers.forEach(tid => {{ NODES[tid]._mergedTranspose = true; }});
+      }}
+    }});
+    visible = visible.filter(n => !toMerge.has(n.id));
+  }}
+  if (isolatedGroupNodes) {{
+    visible = visible.filter(n => isolatedGroupNodes.has(n.id));
+  }}
+  const visIds = new Set(visible.map(n => n.id));
+
+  let visEdges;
+  if (simplifiedView || hideTransposes || mergeTransposeMatmul) {{
+    const inMap = {{}};
+    EDGES.forEach(e => {{ if (!inMap[e.target]) inMap[e.target] = []; inMap[e.target].push(e.source); }});
+    const findVis = (nid, visited = new Set()) => {{
+      if (visited.has(nid)) return [];
+      visited.add(nid);
+      if (visIds.has(nid)) return [nid];
+      const r = [];
+      (inMap[nid] || []).forEach(s => r.push(...findVis(s, visited)));
+      return r;
+    }};
+    const seen = new Set();
+    visEdges = [];
+    EDGES.forEach(e => {{
+      if (!visIds.has(e.target)) return;
+      const sources = visIds.has(e.source) ? [e.source] : findVis(e.source);
+      sources.forEach(vs => {{
+        const key = vs + '->' + e.target;
+        if (!seen.has(key)) {{
+          seen.add(key);
+          visEdges.push({{ source: vs, target: e.target, isParamEdge: NODES[vs].isParam }});
+        }}
+      }});
+    }});
+  }} else {{
+    visEdges = EDGES.filter(e => visIds.has(e.source) && visIds.has(e.target));
+  }}
+  drawEdges = visEdges;
+
+  const depth = {{}};
+  visible.forEach(n => depth[n.id] = 0);
+
+  let changed = true;
+  let iter = 0;
+  while (changed && iter < 1000) {{
+    changed = false; iter++;
+    visEdges.forEach(e => {{
+      if (depth[e.target] <= depth[e.source]) {{
+        depth[e.target] = depth[e.source] + 1;
+        changed = true;
+      }}
+    }});
+  }}
+
+  // Push orphan layer-0 nodes (whose inputs were all hidden) down to just
+  // above their earliest consumer. Without this, neg/select/slice nodes
+  // whose only inputs are hidden params get depth=0 and stretch their
+  // module group boxes to span the entire graph height.
+  visible.forEach(n => {{
+    if (depth[n.id] !== 0) return;
+    const consumers = visEdges.filter(e => e.source === n.id);
+    if (consumers.length === 0) return;
+    const minConsumerDepth = Math.min(...consumers.map(e => depth[e.target]));
+    if (minConsumerDepth > 1) {{
+      depth[n.id] = minConsumerDepth - 1;
+    }}
+  }});
+
+  const maxDepth = Math.max(...Object.values(depth), 0);
+  const layerNodes = Array.from({{ length: maxDepth + 1 }}, () => []);
+  visible.forEach(n => layerNodes[depth[n.id]].push(n));
+
+  // Barycenter crossing minimization (multiple passes)
+  const nodeLayer = {{}};
+  layerNodes.forEach((layer, li) => layer.forEach(n => nodeLayer[n.id] = li));
+
+  for (let pass = 0; pass < 8; pass++) {{
+    // Forward sweep: order each layer by average position of upstream nodes
+    for (let li = 1; li < layerNodes.length; li++) {{
+      layerNodes[li].forEach(n => {{
+        const upEdges = visEdges.filter(e => e.target === n.id && nodeLayer[e.source] < li);
+        if (upEdges.length > 0) {{
+          const positions = upEdges.map(e => {{
+            const srcLayer = layerNodes[nodeLayer[e.source]];
+            return srcLayer.indexOf(NODES[e.source]);
+          }}).filter(p => p >= 0);
+          n._bary = positions.reduce((a, b) => a + b, 0) / positions.length;
+        }} else {{
+          n._bary = layerNodes[li].indexOf(n);
+        }}
+      }});
+      layerNodes[li].sort((a, b) => a._bary - b._bary);
+    }}
+    // Backward sweep
+    for (let li = layerNodes.length - 2; li >= 0; li--) {{
+      layerNodes[li].forEach(n => {{
+        const downEdges = visEdges.filter(e => e.source === n.id && nodeLayer[e.target] > li);
+        if (downEdges.length > 0) {{
+          const positions = downEdges.map(e => {{
+            const tgtLayer = layerNodes[nodeLayer[e.target]];
+            return tgtLayer.indexOf(NODES[e.target]);
+          }}).filter(p => p >= 0);
+          n._bary = positions.reduce((a, b) => a + b, 0) / positions.length;
+        }} else {{
+          n._bary = layerNodes[li].indexOf(n);
+        }}
+      }});
+      layerNodes[li].sort((a, b) => a._bary - b._bary);
+    }}
+  }}
+
+  // Build node→module-group lookup and propagate to ungrouped boundary nodes
+  const nToGrp = {{}};
+  if (GROUPS.length > 0) {{
+    GROUPS.forEach((g, gi) => {{ g.nodes.forEach(nid => {{ if (!(nid in nToGrp)) nToGrp[nid] = gi; }}); }});
+    // Propagate group membership to ungrouped visible non-param nodes via edges.
+    // Use majority-vote: collect all neighboring group votes, assign to the most common.
+    const visNonParam = new Set(visible.filter(n => !n.isParam && !pcSet.has(n.id)).map(n => n.id));
+    // Build adjacency list for fast neighbor lookup
+    const adj = {{}};
+    visEdges.forEach(e => {{
+      if (!adj[e.source]) adj[e.source] = [];
+      if (!adj[e.target]) adj[e.target] = [];
+      adj[e.source].push(e.target);
+      adj[e.target].push(e.source);
+    }});
+    for (let pass = 0; pass < 20; pass++) {{
+      let anyChange = false;
+      // Collect votes for unassigned nodes from their assigned neighbors
+      const pending = {{}};
+      for (const nid of visNonParam) {{
+        if (nToGrp[nid] !== undefined) continue;
+        const votes = {{}};
+        (adj[nid] || []).forEach(nb => {{
+          const g = nToGrp[nb];
+          if (g !== undefined) votes[g] = (votes[g] || 0) + 1;
+        }});
+        const keys = Object.keys(votes);
+        if (keys.length === 1) {{
+          // Unambiguous: only one group neighbor
+          pending[nid] = parseInt(keys[0]);
+        }} else if (keys.length > 1) {{
+          // Majority vote: pick group with most neighbor connections
+          let bestG = -1, bestC = 0;
+          for (const g of keys) {{ if (votes[g] > bestC) {{ bestC = votes[g]; bestG = parseInt(g); }} }}
+          pending[nid] = bestG;
+        }}
+      }}
+      for (const nid in pending) {{
+        nToGrp[nid] = pending[nid];
+        anyChange = true;
+      }}
+      if (!anyChange) break;
+    }}
+    // Store expanded node lists (original + propagated) for hover/click
+    GROUPS.forEach((g, gi) => {{
+      g._allNodes = [];
+      for (const nid in nToGrp) {{ if (nToGrp[nid] === gi) g._allNodes.push(parseInt(nid)); }}
+    }});
+    // Expose for canvas draw (module group highlight on node hover)
+    _nodeModuleGrp = {{}};
+    for (const nid in nToGrp) _nodeModuleGrp[nid] = nToGrp[nid];
+  }}
+
+  // Module-aware clustering: keep same-module nodes adjacent within each layer
+  if (GROUPS.length > 0) {{
+    for (let li = 0; li < layerNodes.length; li++) {{
+      const layer = layerNodes[li];
+      if (layer.length <= 2) continue;
+      const gCenter = {{}}, gCount = {{}};
+      layer.forEach((n, i) => {{
+        const gi = nToGrp[n.id];
+        if (gi !== undefined) {{
+          gCenter[gi] = (gCenter[gi] || 0) + i;
+          gCount[gi] = (gCount[gi] || 0) + 1;
+        }}
+      }});
+      Object.keys(gCenter).forEach(gi => {{ gCenter[gi] /= gCount[gi]; }});
+      layer.forEach((n, i) => {{ n._origPos = i; }});
+      layer.sort((a, b) => {{
+        const ga = nToGrp[a.id], gb = nToGrp[b.id];
+        const ca = ga !== undefined ? gCenter[ga] : a._origPos;
+        const cb = gb !== undefined ? gCenter[gb] : b._origPos;
+        if (Math.abs(ca - cb) > 0.01) return ca - cb;
+        return a._origPos - b._origPos;
+      }});
+    }}
+  }}
+  const moduleGap = GROUPS.length > 0 ? padX * 0.6 : 0;
+
+  // Find max layer width (accounting for module group gaps)
+  let maxLayerW = 0;
+  layerNodes.forEach(layer => {{
+    let w = layer.length * (nodeW + padX);
+    if (moduleGap && layer.length > 1) {{
+      for (let i = 1; i < layer.length; i++) {{
+        if (nToGrp[layer[i].id] !== undefined && nToGrp[layer[i - 1].id] !== undefined
+            && nToGrp[layer[i].id] !== nToGrp[layer[i - 1].id]) {{
+          w += moduleGap;
+        }}
+      }}
+    }}
+    maxLayerW = Math.max(maxLayerW, w);
+  }});
+  const totalW = Math.max(maxLayerW, (nodeW + padX));
+
+  layerNodes.forEach((layer, li) => {{
+    // Compute layer width with module gaps
+    let layerW = layer.length * (nodeW + padX);
+    if (moduleGap && layer.length > 1) {{
+      for (let i = 1; i < layer.length; i++) {{
+        if (nToGrp[layer[i].id] !== undefined && nToGrp[layer[i - 1].id] !== undefined
+            && nToGrp[layer[i].id] !== nToGrp[layer[i - 1].id]) {{
+          layerW += moduleGap;
+        }}
+      }}
+    }}
+    const startX = (totalW - layerW) / 2 + padX / 2;
+    let xOff = 0;
+    layer.forEach((node, ni) => {{
+      if (moduleGap && ni > 0 && nToGrp[node.id] !== undefined
+          && nToGrp[layer[ni - 1].id] !== undefined
+          && nToGrp[node.id] !== nToGrp[layer[ni - 1].id]) {{
+        xOff += moduleGap;
+      }}
+      node.x = startX + ni * (nodeW + padX) + xOff;
+      node.y = 40 + li * (nodeH + padY);
+      node.w = nodeW;
+      node.h = nodeH;
+      node._visible = true;
+      node._layer = li;
+    }});
+  }});
+
+  // Hide param nodes that aren't shown
+  NODES.forEach(n => {{
+    if (!visIds.has(n.id)) {{
+      n._visible = false;
+      n.x = -9999; n.y = -9999; n.w = 0; n.h = 0;
+    }}
+  }});
+
+  // Precompute per-layer horizontal bounds for edge routing
+  layerBounds = [];
+  const maxLy = layerNodes.length;
+  for (let l = 0; l < maxLy; l++) {{
+    let lmin = Infinity, lmax = -Infinity;
+    layerNodes[l].forEach(n => {{
+      if (n._visible) {{ lmin = Math.min(lmin, n.x); lmax = Math.max(lmax, n.x + n.w); }}
+    }});
+    layerBounds.push({{ minX: lmin, maxX: lmax }});
+  }}
+
+  // Precompute per-node port offsets for edge attachment spreading
+  const inCount = {{}}, outCount = {{}};
+  NODES.forEach(n => {{ inCount[n.id] = 0; outCount[n.id] = 0; }});
+  visEdges.forEach(e => {{ outCount[e.source]++; inCount[e.target]++; }});
+  const inIdx = {{}}, outIdx = {{}};
+  NODES.forEach(n => {{ inIdx[n.id] = 0; outIdx[n.id] = 0; }});
+  // Assign port indices (edges sorted by source/target x to reduce crossings)
+  visEdges.sort((a, b) => {{
+    const sa = NODES[a.source], sb = NODES[b.source];
+    return (sa.x || 0) - (sb.x || 0);
+  }});
+  visEdges.forEach(e => {{
+    e._outPort = outIdx[e.source]++;
+    e._outTotal = outCount[e.source];
+  }});
+  // Re-sort by target for input ports
+  const edgesByTarget = [...visEdges].sort((a, b) => {{
+    const sa = NODES[a.source], sb = NODES[b.source];
+    return (sa.x || 0) - (sb.x || 0);
+  }});
+  const inIdxT = {{}};
+  NODES.forEach(n => inIdxT[n.id] = 0);
+  edgesByTarget.forEach(e => {{
+    e._inPort = inIdxT[e.target]++;
+    e._inTotal = inCount[e.target];
+  }});
+
+  // Compute module group bounding boxes using propagated nToGrp (includes boundary nodes)
+  GROUPS.forEach((g, gi) => {{
+    const gnodes = NODES.filter(n => nToGrp[n.id] === gi && n._visible && !n.isParam && !pcSet.has(n.id));
+    if (gnodes.length === 0) {{ g._visible = false; return; }}
+    g._visible = true;
+    g._x = Math.min(...gnodes.map(n => n.x)) - 10;
+    g._y = Math.min(...gnodes.map(n => n.y)) - 20;
+    g._w = Math.max(...gnodes.map(n => n.x + n.w)) - g._x + 10;
+    g._h = Math.max(...gnodes.map(n => n.y + n.h)) - g._y + 10;
+  }});
+  // Compute line group bounding boxes (use original node lists)
+  LINE_GROUPS.forEach(g => {{
+    const gnodes = g.nodes.map(id => NODES[id]).filter(n => n._visible && !n.isParam && !pcSet.has(n.id));
+    if (gnodes.length === 0) {{ g._visible = false; return; }}
+    g._visible = true;
+    g._x = Math.min(...gnodes.map(n => n.x)) - 10;
+    g._y = Math.min(...gnodes.map(n => n.y)) - 20;
+    g._w = Math.max(...gnodes.map(n => n.x + n.w)) - g._x + 10;
+    g._h = Math.max(...gnodes.map(n => n.y + n.h)) - g._y + 10;
+  }});
+}}
+layout();
+
+// Camera
+let camX = 0, camY = 0, zoom = 1;
+
+// Selection / hover state (must be declared before draw/fitView)
+let selectedNode = null;
+let hoveredNode = null;
+let searchTerm = '';
+
+function fitView() {{
+  const visible = NODES.filter(n => n._visible);
+  if (!visible.length) return;
+  const xs = visible.map(n => n.x + n.w / 2);
+  const ys = visible.map(n => n.y + n.h / 2);
+  const cx = (Math.min(...xs) + Math.max(...xs)) / 2;
+  const cy = (Math.min(...ys) + Math.max(...ys)) / 2;
+  camX = cx - W / 2;
+  camY = cy - H / 2;
+  const gw = Math.max(...xs) - Math.min(...xs) + 300;
+  const gh = Math.max(...ys) - Math.min(...ys) + 200;
+  zoom = Math.min(W / gw, H / gh, 2);
+  zoom = Math.max(zoom, 0.08);
+  draw();
+}}
+fitView();
+
+function switchGraph(which) {{
+  const data = which === 'forward' ? FW_DATA : BW_DATA;
+  if (!data || activeGraph === which) return;
+  activeGraph = which;
+  NODES = data.nodes;
+  EDGES = data.edges;
+  GROUPS = data.groups;
+  LINE_GROUPS = data.lineGroups;
+  KERNEL_GROUPS = data.kernelGroups || [];
+  CODE = data.code;
+  _allHaveStats = NODES.length > 0 && NODES.every(n => n.stats);
+  _buildGroupLookups();
+  document.getElementById('stats').textContent = data.numParams + ' params | ' + data.numCompute + ' ops';
+  document.querySelectorAll('.graph-tab').forEach(t => t.classList.toggle('active', t.dataset.graph === which));
+  selectedNode = null; hoveredNode = null; hoveredLineNodes = null; hoveredModuleNodes = null;
+  document.getElementById('node-info').innerHTML = '<p style="color:#8b949e;font-size:12px;">Click a node to inspect it</p>';
+
+  // Re-apply persisted module isolation by name
+  if (isolatedGroupKey && isolatedGroupKey.startsWith('module:')) {{
+    const oldIdx = parseInt(isolatedGroupKey.split(':')[1]);
+    const oldName = (which === 'forward' ? BW_DATA : FW_DATA).groups[oldIdx]?.name;
+    const newIdx = GROUPS.findIndex(g => g.name === oldName);
+    if (newIdx >= 0) {{
+      isolatedGroupNodes = new Set(GROUPS[newIdx]._allNodes || GROUPS[newIdx].nodes);
+      isolatedGroupKey = 'module:' + newIdx;
+    }} else {{
+      isolatedGroupNodes = null;
+      isolatedGroupKey = null;
+    }}
+  }}
+  // Re-apply persisted line highlight by name
+  if (highlightedGroupKey && highlightedGroupKey.startsWith('line:')) {{
+    const oldIdx = parseInt(highlightedGroupKey.split(':')[1]);
+    const oldName = (which === 'forward' ? BW_DATA : FW_DATA).lineGroups[oldIdx]?.name;
+    const newIdx = LINE_GROUPS.findIndex(g => g.name === oldName);
+    if (newIdx >= 0) {{
+      highlightedNodes = new Set(LINE_GROUPS[newIdx].nodes);
+      highlightedGroupKey = 'line:' + newIdx;
+    }} else {{
+      highlightedNodes = null;
+      highlightedGroupKey = null;
+    }}
+  }}
+
+  rebuildGroupsPanel();
+  layout();
+  fitView();
+}}
+
+function zoomIn() {{ zoom = Math.min(5, zoom * 1.3); draw(); }}
+function zoomOut() {{ zoom = Math.max(0.05, zoom / 1.3); draw(); }}
+
+function screenToWorld(sx, sy) {{
+  const r = canvas.getBoundingClientRect();
+  const cx = sx - r.left, cy = sy - r.top;
+  return [(cx - W/2) / zoom + camX + W/2, (cy - H/2) / zoom + camY + H/2];
+}}
+
+function ptToQuadBez(px, py, x0, y0, cx, cy, x1, y1) {{
+  let best = Infinity;
+  for (let i = 0; i <= 20; i++) {{
+    const t = i / 20;
+    const u = 1 - t;
+    const bx = u*u*x0 + 2*u*t*cx + t*t*x1;
+    const by = u*u*y0 + 2*u*t*cy + t*t*y1;
+    const d = (bx-px)*(bx-px) + (by-py)*(by-py);
+    if (d < best) best = d;
+  }}
+  return Math.sqrt(best);
+}}
+
+function ptToSeg(px, py, x0, y0, x1, y1) {{
+  const dx = x1-x0, dy = y1-y0, lenSq = dx*dx + dy*dy;
+  if (lenSq === 0) return Math.hypot(px-x0, py-y0);
+  const t = Math.max(0, Math.min(1, ((px-x0)*dx + (py-y0)*dy) / lenSq));
+  return Math.hypot(px - (x0+t*dx), py - (y0+t*dy));
+}}
+
+function hitTestEdge(wx, wy) {{
+  const tol = 8 / zoom;
+  for (let i = drawEdges.length - 1; i >= 0; i--) {{
+    const e = drawEdges[i];
+    if (e.isParamEdge && !showParamEdges) continue;
+    const s = NODES[e.source], t = NODES[e.target];
+    if (!s._visible || !t._visible) continue;
+    const outTotal = e._outTotal || 1, outPort = e._outPort || 0;
+    const inTotal = e._inTotal || 1, inPort = e._inPort || 0;
+    const spW = s.w * 0.7;
+    const sx = s.x + (s.w - spW)/2 + (outTotal > 1 ? (outPort/(outTotal-1))*spW : spW/2);
+    const sy = s.y + s.h;
+    const spWT = t.w * 0.7;
+    const tx = t.x + (t.w - spWT)/2 + (inTotal > 1 ? (inPort/(inTotal-1))*spWT : spWT/2);
+    const ty = t.y;
+
+    const dy = ty - sy;
+    const layerGap = nodeH + padY;
+    const layerSpan = Math.max(1, Math.round(dy / layerGap));
+    let dist = Infinity;
+
+    let routed = false;
+    if (layerSpan > 1 && s._layer !== undefined && t._layer !== undefined) {{
+      const sL = s._layer, tL = t._layer;
+      let rBound = -Infinity, lBound = Infinity;
+      for (let l = sL + 1; l < tL && l < layerBounds.length; l++) {{
+        const lb = layerBounds[l];
+        if (lb.maxX !== -Infinity) {{ rBound = Math.max(rBound, lb.maxX); lBound = Math.min(lBound, lb.minX); }}
+      }}
+      if (rBound !== -Infinity) {{
+        routed = true;
+        const exitY = sy + padY * 0.42;
+        const enterY = ty - padY * 0.42;
+        const rCh = rBound + padX * 0.45;
+        const lCh = lBound - padX * 0.45;
+        const mid = (sx + tx) / 2;
+        const baseCh = (Math.abs(rCh - mid) <= Math.abs(lCh - mid)) ? rCh : lCh;
+        const spread = ((e._outPort || 0) + (e._inPort || 0)) * 7;
+        const chX = baseCh + spread * (baseCh >= mid ? 1 : -1);
+        dist = Math.min(
+          ptToSeg(wx, wy, sx, sy, sx, exitY),
+          ptToSeg(wx, wy, sx, exitY, chX, exitY),
+          ptToSeg(wx, wy, chX, exitY, chX, enterY),
+          ptToSeg(wx, wy, chX, enterY, tx, enterY),
+          ptToSeg(wx, wy, tx, enterY, tx, ty)
+        );
+      }}
+    }}
+
+    if (!routed) {{
+      const midX = (sx+tx)/2, midY = (sy+ty)/2;
+      dist = Math.min(
+        ptToQuadBez(wx, wy, sx, sy, sx, midY, midX, midY),
+        ptToQuadBez(wx, wy, midX, midY, tx, midY, tx, ty)
+      );
+    }}
+
+    if (dist < tol) return e;
+  }}
+  return null;
+}}
+
+function draw() {{
+  ctx.clearRect(0, 0, W, H);
+  ctx.save();
+  ctx.translate(W/2, H/2);
+  ctx.scale(zoom, zoom);
+  ctx.translate(-camX - W/2, -camY - H/2);
+
+  // Draw module group backgrounds
+  if (showGroups && !isolatedGroupNodes) {{
+    const grpPalette = ['#7AA2F718','#9ECE6A18','#E0AF6818','#BB9AF718','#F7768E18','#43D9AD18','#FF9E6418','#636DA618'];
+    GROUPS.forEach((g, gi) => {{
+      if (!g._visible) return;
+      const gc = grpPalette[gi % grpPalette.length];
+      ctx.fillStyle = gc;
+      ctx.strokeStyle = gc.slice(0, 7) + '30';
+      ctx.lineWidth = 1;
+      ctx.beginPath();
+      ctx.roundRect(g._x, g._y, g._w, g._h, 10);
+      ctx.fill();
+      ctx.stroke();
+      ctx.fillStyle = gc.slice(0, 7) + '70';
+      ctx.font = 'bold 9px sans-serif';
+      ctx.textAlign = 'left';
+      const label = g.name.length > 60 ? g.name.slice(0, 58) + '..' : g.name;
+      ctx.fillText(label, g._x + 8, g._y + 12);
+    }});
+  }}
+
+  // Compute 2-inputs-up highlight set
+  const directInputIds = new Set();
+  if (selectedNode !== null) {{
+    drawEdges.forEach(e => {{
+      if (e.target === selectedNode.id) directInputIds.add(e.source);
+    }});
+  }}
+
+  // Draw edges with port spreading
+  drawEdges.forEach(e => {{
+    if (e.isParamEdge && !showParamEdges) return;
+    const s = NODES[e.source], t = NODES[e.target];
+    if (!s._visible || !t._visible) return;
+
+    // Port spreading: distribute attachment points across node width
+    const outTotal = e._outTotal || 1;
+    const outPort = e._outPort || 0;
+    const inTotal = e._inTotal || 1;
+    const inPort = e._inPort || 0;
+
+    // Spread ports across the middle 70% of node width
+    const spreadW = s.w * 0.7;
+    const sx = s.x + (s.w - spreadW) / 2 + (outTotal > 1 ? (outPort / (outTotal - 1)) * spreadW : spreadW / 2);
+    const sy = s.y + s.h;
+
+    const spreadWT = t.w * 0.7;
+    const tx = t.x + (t.w - spreadWT) / 2 + (inTotal > 1 ? (inPort / (inTotal - 1)) * spreadWT : spreadWT / 2);
+    const ty = t.y;
+
+    const isHighlighted = selectedNode !== null &&
+      (s.id === selectedNode.id || t.id === selectedNode.id);
+    const is2Up = selectedNode !== null && !isHighlighted && directInputIds.has(t.id);
+    const isHoverHL = hoveredNode !== null &&
+      (s.id === hoveredNode.id || t.id === hoveredNode.id);
+
+    if (e.isParamEdge) {{
+      ctx.setLineDash([4, 4]);
+      ctx.globalAlpha = isHighlighted ? 0.8 : (is2Up ? 0.5 : 0.15);
+    }} else {{
+      ctx.setLineDash([]);
+      ctx.globalAlpha = isHighlighted ? 1 : (is2Up ? 0.7 : (isHoverHL ? 0.9 : 0.5));
+    }}
+
+    ctx.strokeStyle = isHighlighted ? '#7AA2F7' : (is2Up ? '#7AA2F770' : (isHoverHL ? '#7AA2F790' : '#3B4261'));
+    ctx.lineWidth = isHighlighted ? 2.5 : (is2Up ? 1.8 : (isHoverHL ? 1.5 : 1));
+
+    const dy = ty - sy;
+    const layerGap = nodeH + padY;
+    const layerSpan = Math.max(1, Math.round(dy / layerGap));
+
+    ctx.beginPath();
+    ctx.moveTo(sx, sy);
+
+    let routed = false;
+    if (layerSpan > 1 && s._layer !== undefined && t._layer !== undefined) {{
+      // Multi-layer edge: find intermediate-layer bounds to route around
+      const sL = s._layer, tL = t._layer;
+      let rBound = -Infinity, lBound = Infinity;
+      for (let l = sL + 1; l < tL && l < layerBounds.length; l++) {{
+        const lb = layerBounds[l];
+        if (lb.maxX !== -Infinity) {{
+          rBound = Math.max(rBound, lb.maxX);
+          lBound = Math.min(lBound, lb.minX);
+        }}
+      }}
+
+      if (rBound !== -Infinity) {{
+        routed = true;
+        const r = 14;
+        const exitY = sy + padY * 0.42;
+        const enterY = ty - padY * 0.42;
+        const rCh = rBound + padX * 0.45;
+        const lCh = lBound - padX * 0.45;
+        const mid = (sx + tx) / 2;
+        const baseCh = (Math.abs(rCh - mid) <= Math.abs(lCh - mid)) ? rCh : lCh;
+        const spread = ((e._outPort || 0) + (e._inPort || 0)) * 7;
+        const chX = baseCh + spread * (baseCh >= mid ? 1 : -1);
+
+        ctx.arcTo(sx, exitY, chX, exitY, r);
+        ctx.arcTo(chX, exitY, chX, enterY, r);
+        ctx.arcTo(chX, enterY, tx, enterY, r);
+        ctx.arcTo(tx, enterY, tx, ty, r);
+        ctx.lineTo(tx, ty);
+      }}
+    }}
+
+    if (!routed) {{
+      // Adjacent layer or no obstacles: smooth S-curve via midpoint
+      const midX = (sx + tx) / 2;
+      const midY = (sy + ty) / 2;
+      ctx.quadraticCurveTo(sx, midY, midX, midY);
+      ctx.quadraticCurveTo(tx, midY, tx, ty);
+    }}
+
+    ctx.stroke();
+
+    // Arrow at target
+    if (!e.isParamEdge || isHighlighted || is2Up) {{
+      ctx.beginPath();
+      ctx.moveTo(tx, ty);
+      ctx.lineTo(tx - 4, ty - 7);
+      ctx.lineTo(tx + 4, ty - 7);
+      ctx.fillStyle = isHighlighted ? '#7AA2F7' : (is2Up ? '#7AA2F770' : '#3B4261');
+      ctx.fill();
+    }}
+
+    ctx.setLineDash([]);
+    ctx.globalAlpha = 1;
+  }});
+
+  // Draw nodes
+  NODES.forEach(n => {{
+    if (!n._visible) return;
+
+    const isSelected = selectedNode && selectedNode.id === n.id;
+    const isHovered = hoveredNode && hoveredNode.id === n.id;
+    const matchesSearch = searchTerm && (
+      n.name.toLowerCase().includes(searchTerm) ||
+      _dn(n).toLowerCase().includes(searchTerm) ||
+      n.target.toLowerCase().includes(searchTerm) ||
+      (n.sourceGroup && n.sourceGroup.toLowerCase().includes(searchTerm))
+    );
+    const activeHL = highlightedNodes || hoveredLineNodes || hoveredModuleNodes;
+    const isHighlighted = activeHL && activeHL.has(n.id);
+    const dimmed = (searchTerm && !matchesSearch) || (activeHL && !isHighlighted && !isSelected);
+
+    ctx.globalAlpha = dimmed ? 0.15 : 1;
+
+    const nColor = (colorByKernel && nodeKernelColor[n.id]) ? nodeKernelColor[n.id] : n.color;
+
+    // Node box
+    const r = 8;
+    ctx.beginPath();
+    ctx.roundRect(n.x, n.y, n.w, n.h, r);
+
+    // Fill - subtle tint from node colour
+    if (isHighlighted) ctx.fillStyle = nColor + '28';
+    else if (isSelected) ctx.fillStyle = nColor + '30';
+    else if (isHovered) ctx.fillStyle = nColor + '18';
+    else ctx.fillStyle = nColor + '0a';
+    ctx.fill();
+
+    // Glow for highlighted nodes
+    if (isHighlighted) {{
+      ctx.save();
+      ctx.shadowColor = nColor;
+      ctx.shadowBlur = 10;
+      ctx.strokeStyle = nColor;
+      ctx.lineWidth = 2;
+      ctx.stroke();
+      ctx.restore();
+    }}
+
+    // Border
+    ctx.strokeStyle = isSelected ? nColor : (matchesSearch ? '#E0AF68' : nColor + '50');
+    ctx.lineWidth = isSelected ? 2.5 : (matchesSearch ? 2 : 1);
+    ctx.stroke();
+
+    // Coloured left accent bar
+    ctx.fillStyle = nColor + 'cc';
+    ctx.beginPath();
+    ctx.roundRect(n.x, n.y, 4, n.h, [r, 0, 0, r]);
+    ctx.fill();
+
+    // Name label (bold)
+    ctx.fillStyle = '#e6edf3';
+    ctx.font = 'bold 11px "SF Mono", monospace';
+    ctx.textAlign = 'left';
+    const avail = n.w - 22;
+    const nameMax = Math.max(8, Math.floor(avail / 6.6));
+    const dispName = _dn(n);
+    const nameStr = dispName.length > nameMax ? dispName.slice(0, nameMax - 1) + '\u2026' : dispName;
+    ctx.fillText(nameStr, n.x + 10, n.y + 20);
+
+    // Target label
+    ctx.font = '10px sans-serif';
+    ctx.fillStyle = nColor;
+    let targetStr = n.target;
+    if (n._mergedTranspose) targetStr += ' .T';
+    const targetMax = Math.max(8, Math.floor(avail / 6));
+    targetStr = targetStr.length > targetMax ? targetStr.slice(0, targetMax - 1) + '\u2026' : targetStr;
+    ctx.fillText(targetStr, n.x + 10, n.y + 35);
+
+    // Shape annotation (right-aligned, small)
+    if (n.meta && n.meta.shape) {{
+      ctx.font = '9px monospace';
+      ctx.fillStyle = '#565F89';
+      ctx.textAlign = 'right';
+      const shapeMax = Math.max(6, Math.floor(avail / 5.4));
+      const shapeStr = n.meta.shape.length > shapeMax ? n.meta.shape.slice(0, shapeMax - 1) + '\u2026' : n.meta.shape;
+      ctx.fillText(shapeStr, n.x + n.w - 6, n.y + 46);
+    }}
+
+    // Tensor data indicator — small dot top-right when stats are recorded
+    // Only show when not all nodes have stats (otherwise it's visual noise)
+    if (n.stats && !dimmed && !_allHaveStats) {{
+      ctx.beginPath();
+      ctx.arc(n.x + n.w - 8, n.y + 8, 3, 0, Math.PI * 2);
+      ctx.fillStyle = '#43D9AD';
+      ctx.fill();
+    }}
+
+    ctx.globalAlpha = 1;
+    ctx.textAlign = 'left';
+  }});
+
+  ctx.restore();
+}}
+
+draw();
+
+// Groups panel (collapsible) with click-to-isolate
+const gPanel = document.getElementById('groups-panel');
+let sectionExpanded = {{ module: true, line: true }};
+function buildGroupSection(title, groups, type) {{
+  const expanded = sectionExpanded[type] !== false;
+  const titleColor = type === 'kernel' ? '#8b949e' : '';
+  const titleStyle = titleColor ? ` style="margin:0;color:${{titleColor}}"` : ' style="margin:0"';
+  let h = `<div style="margin-top:10px"><div class="group-header" onclick="toggleSection(this, '${{type}}')"><span class="group-toggle${{expanded ? ' open' : ''}}">\u25b6</span><h3${{titleStyle}}>${{title}} (${{groups.length}})</h3></div>`;
+  const leaveAttr = (type === 'line' || type === 'module' || type === 'kernel') ? ` onmouseleave="unhoverGroup('${{type}}')"` : '';
+  h += `<div class="group-list" style="display:${{expanded ? 'block' : 'none'}}"${{leaveAttr}}>`;
+  groups.forEach((g, i) => {{
+    let label, fullTitle;
+    if (type === 'kernel') {{
+      const ktype = g.type === 'extern' ? ' [cuBLAS]' : g.type === 'native' ? ' [CUDA]' : '';
+      label = `<span style="color:#8b949e">${{_esc(g.name)}}</span><span style="color:#484f58">${{_esc(ktype)}}</span>`;
+      fullTitle = g.name + ktype;
+    }} else if (type === 'line' && g.code) {{
+      label = `<span style="color:#58a6ff">${{_esc(g.name)}}</span> <span style="color:#636da6">${{_esc(g.code)}}</span>`;
+      fullTitle = g.name + ' ' + g.code;
+    }} else {{
+      label = _esc(g.name);
+      fullTitle = g.name;
+    }}
+    const hoverAttr = (type === 'line' || type === 'module' || type === 'kernel') ? ` onmouseenter="hoverGroup('${{type}}', ${{i}})"` : '';
+    h += `<div class="source-group" title="${{_esc(fullTitle)}}" data-gtype="${{type}}" data-gidx="${{i}}" onclick="event.stopPropagation();toggleIsolate('${{type}}',${{i}})"${{hoverAttr}}>${{label}} <span style="color:#58a6ff;white-space:nowrap">(${{g.nodes.length}})</span></div>`;
+  }});
+  h += '</div></div>';
+  return h;
+}}
+function toggleSection(header, type) {{
+  const toggle = header.querySelector('.group-toggle');
+  const list = header.nextElementSibling;
+  const open = list.style.display !== 'none';
+  list.style.display = open ? 'none' : 'block';
+  toggle.classList.toggle('open', !open);
+  sectionExpanded[type] = !open;
+}}
+function hoverGroup(type, idx) {{
+  if (isolatedGroupKey || highlightedGroupKey) return;
+  if (type === 'line') {{
+    hoveredLineNodes = new Set(LINE_GROUPS[idx].nodes);
+    hoveredModuleNodes = null;
+  }} else if (type === 'module') {{
+    hoveredModuleNodes = new Set(GROUPS[idx]._allNodes || GROUPS[idx].nodes);
+    hoveredLineNodes = null;
+  }} else if (type === 'kernel') {{
+    hoveredLineNodes = new Set(KERNEL_GROUPS[idx].nodes);
+    hoveredModuleNodes = null;
+  }}
+  draw();
+}}
+function unhoverGroup(type) {{
+  if ((type === 'line' || type === 'kernel') && hoveredLineNodes) {{
+    hoveredLineNodes = null;
+    draw();
+  }} else if (type === 'module' && hoveredModuleNodes) {{
+    hoveredModuleNodes = null;
+    draw();
+  }}
+}}
+function rebuildGroupsPanel() {{
+  let gpHtml = '';
+  if (GROUPS.length > 0) gpHtml += buildGroupSection('Module Groups', GROUPS, 'module');
+  if (LINE_GROUPS.length > 0) gpHtml += buildGroupSection('Line Groups', LINE_GROUPS, 'line');
+  if (KERNEL_GROUPS.length > 0) gpHtml += buildGroupSection('Kernel Groups', KERNEL_GROUPS, 'kernel');
+  gPanel.innerHTML = gpHtml;
+  updateGroupHighlight();
+}}
+rebuildGroupsPanel();
+
+function toggleIsolate(type, idx) {{
+  const key = type + ':' + idx;
+  let activated = false;
+  if (type === 'module') {{
+    if (isolatedGroupKey === key) {{
+      isolatedGroupNodes = null;
+      isolatedGroupKey = null;
+    }} else {{
+      isolatedGroupNodes = new Set(GROUPS[idx]._allNodes || GROUPS[idx].nodes);
+      isolatedGroupKey = key;
+      activated = true;
+    }}
+    updateGroupHighlight();
+    layout();
+    fitView();
+  }} else if (type === 'kernel') {{
+    if (highlightedGroupKey === key) {{
+      highlightedNodes = null;
+      highlightedGroupKey = null;
+    }} else {{
+      highlightedNodes = new Set(KERNEL_GROUPS[idx].nodes);
+      highlightedGroupKey = key;
+      activated = true;
+    }}
+    updateGroupHighlight();
+    draw();
+  }} else {{
+    if (highlightedGroupKey === key) {{
+      highlightedNodes = null;
+      highlightedGroupKey = null;
+    }} else {{
+      highlightedNodes = new Set(LINE_GROUPS[idx].nodes);
+      highlightedGroupKey = key;
+      activated = true;
+    }}
+    updateGroupHighlight();
+    draw();
+  }}
+  if (activated) selectGroupLastOutput(type, idx);
+}}
+
+function selectGroupLastOutput(type, idx) {{
+  const ids = type === 'module' ? (GROUPS[idx]._allNodes || GROUPS[idx].nodes)
+            : type === 'kernel' ? KERNEL_GROUPS[idx].nodes
+            : LINE_GROUPS[idx].nodes;
+  let lastNode = null, lastId = -1;
+  for (const nid of ids) {{
+    if (nid > lastId && NODES[nid]) {{ lastId = nid; lastNode = NODES[nid]; }}
+  }}
+  if (lastNode) {{
+    selectedNode = lastNode;
+    showNodeInfo(lastNode, type);
+    draw();
+  }}
+}}
+function updateGroupHighlight() {{
+  gPanel.querySelectorAll('.source-group').forEach(el => {{
+    const k = el.dataset.gtype + ':' + el.dataset.gidx;
+    el.classList.toggle('isolated', k === isolatedGroupKey || k === highlightedGroupKey);
+  }});
+  // Clear node-match when a group is active (it takes precedence)
+  if (isolatedGroupKey || highlightedGroupKey) {{
+    _matchedLineIdx = -1; _matchedKernelIdx = -1;
+    gPanel.querySelectorAll('.source-group.node-match').forEach(el => el.classList.remove('node-match'));
+  }}
+}}
+
+// Subtle sidebar highlight for line/kernel/module groups matching the hovered/selected node
+let _matchedLineIdx = -1, _matchedKernelIdx = -1, _matchedModuleIdx = -1;
+function updateNodeGroupMatch(node) {{
+  let newLine = -1, newKernel = -1, newModule = -1;
+  if (node && !isolatedGroupKey && !highlightedGroupKey) {{
+    const li = _nodeToLine[node.id];
+    if (li !== undefined) newLine = li;
+    const ki = _nodeToKernel[node.id];
+    if (ki !== undefined) newKernel = ki;
+    const mi = _nodeModuleGrp[node.id];
+    if (mi !== undefined) newModule = mi;
+  }}
+  if (newLine === _matchedLineIdx && newKernel === _matchedKernelIdx && newModule === _matchedModuleIdx) return;
+  _matchedLineIdx = newLine;
+  _matchedKernelIdx = newKernel;
+  _matchedModuleIdx = newModule;
+  gPanel.querySelectorAll('.source-group').forEach(el => {{
+    const t = el.dataset.gtype, idx = parseInt(el.dataset.gidx);
+    const match = (t === 'line' && idx === _matchedLineIdx)
+               || (t === 'kernel' && idx === _matchedKernelIdx)
+               || (t === 'module' && idx === _matchedModuleIdx);
+    el.classList.toggle('node-match', match);
+  }});
+}}
+
+// Interaction
+let dragging = false, dragStartX, dragStartY, didDrag = false;
+canvas.addEventListener('mousedown', e => {{
+  dragging = true; didDrag = false;
+  dragStartX = e.clientX;
+  dragStartY = e.clientY;
+}});
+canvas.addEventListener('mouseleave', () => {{
+  document.getElementById('canvas-tooltip').style.display = 'none';
+  updateNodeGroupMatch(selectedNode);
+  if (hoveredModuleNodes) {{ hoveredModuleNodes = null; draw(); }}
+}});
+canvas.addEventListener('mousemove', e => {{
+  if (dragging) {{
+    document.getElementById('canvas-tooltip').style.display = 'none';
+    const dx = e.clientX - dragStartX, dy = e.clientY - dragStartY;
+    if (Math.abs(dx) > 2 || Math.abs(dy) > 2) didDrag = true;
+    camX -= dx / zoom;
+    camY -= dy / zoom;
+    dragStartX = e.clientX;
+    dragStartY = e.clientY;
+    draw();
+  }} else {{
+    const [wx, wy] = screenToWorld(e.clientX, e.clientY);
+    hoveredNode = null;
+    for (const n of NODES) {{
+      if (!n._visible) continue;
+      if (wx >= n.x && wx <= n.x + n.w && wy >= n.y && wy <= n.y + n.h) {{
+        hoveredNode = n;
+        break;
+      }}
+    }}
+    // Check if over a module group rect (for hover highlight)
+    let newHoveredModule = null;
+    if (showGroups && !isolatedGroupNodes && !isolatedGroupKey && !highlightedGroupKey && GROUPS.length) {{
+      for (let gi = GROUPS.length - 1; gi >= 0; gi--) {{
+        const g = GROUPS[gi];
+        if (!g._visible) continue;
+        if (wx >= g._x && wx <= g._x + g._w && wy >= g._y && wy <= g._y + g._h) {{
+          newHoveredModule = new Set(g._allNodes || g.nodes);
+          break;
+        }}
+      }}
+    }}
+    hoveredModuleNodes = newHoveredModule;
+    if (hoveredModuleNodes) hoveredLineNodes = null;
+    updateNodeGroupMatch(selectedNode || hoveredNode);
+    const hoveredEdge = !hoveredNode ? hitTestEdge(wx, wy) : null;
+    canvas.style.cursor = (hoveredNode || hoveredEdge) ? 'pointer' : 'grab';
+    const tt = document.getElementById('canvas-tooltip');
+    if (hoveredNode) {{
+      const n = hoveredNode;
+      const si = n.sourceInfo || {{}};
+      let lines = `<span class="tt-label">Name:</span> <span class="tt-val">${{_esc(_dn(n))}}</span>`;
+      lines += `\n<span class="tt-label">Target:</span> <span class="tt-val">${{_esc(n.target)}}</span>`;
+      if (n.meta.shape) lines += `\n<span class="tt-label">Shape:</span> <span class="tt-val">${{_esc(n.meta.shape)}}</span>`;
+      if (n.meta.dtype) lines += `\n<span class="tt-label">Dtype:</span> <span class="tt-val">${{_esc(n.meta.dtype)}}</span>`;
+      if (si.sourceFn) lines += `\n<span class="tt-label">Source:</span> <span class="tt-val">${{_esc(si.sourceFn)}}</span>`;
+      if (n.kernelGroup) lines += `\n<span class="tt-label">Kernel:</span> <span class="tt-val">${{_esc(n.kernelGroup)}}</span>`;
+      tt.innerHTML = lines;
+      tt.style.display = 'block';
+      const tx = Math.min(e.clientX + 14, window.innerWidth - tt.offsetWidth - 10);
+      const ty = Math.min(e.clientY + 14, window.innerHeight - tt.offsetHeight - 10);
+      tt.style.left = tx + 'px';
+      tt.style.top = ty + 'px';
+    }} else {{
+      tt.style.display = 'none';
+    }}
+    draw();
+  }}
+}});
+canvas.addEventListener('mouseup', e => {{
+  if (dragging && !didDrag) {{
+    const [wx, wy] = screenToWorld(e.clientX, e.clientY);
+    selectedNode = null;
+    for (const n of NODES) {{
+      if (!n._visible) continue;
+      if (wx >= n.x && wx <= n.x + n.w && wy >= n.y && wy <= n.y + n.h) {{
+        selectedNode = n;
+        break;
+      }}
+    }}
+    if (selectedNode) {{
+      showNodeInfo(selectedNode);
+    }} else {{
+      const edge = hitTestEdge(wx, wy);
+      if (edge) {{
+        const srcNode = NODES[edge.source];
+        selectedNode = srcNode;
+        showNodeInfo(srcNode);
+      }} else {{
+        showNodeInfo(null);
+      }}
+    }}
+    updateNodeGroupMatch(selectedNode);
+    draw();
+  }}
+  dragging = false;
+}});
+canvas.addEventListener('wheel', e => {{
+  e.preventDefault();
+  const [wx, wy] = screenToWorld(e.clientX, e.clientY);
+  const factor = e.deltaY > 0 ? 0.9 : 1.1;
+  const newZoom = Math.max(0.03, Math.min(8, zoom * factor));
+  // Zoom towards cursor
+  camX = wx - (wx - camX) * (zoom / newZoom);
+  camY = wy - (wy - camY) * (zoom / newZoom);
+  zoom = newZoom;
+  draw();
+}}, {{ passive: false }});
+
+function showNodeInfo(node, groupType) {{
+  const info = document.getElementById('node-info');
+  if (!node) {{
+    info.innerHTML = '<p style="color:#8b949e;font-size:12px;">Click a node to inspect it</p>';
+    return;
+  }}
+  const si = node.sourceInfo || {{}};
+  let html = `<div class="info-row"><span class="info-label">Name</span><span class="info-value">${{_esc(_dn(node))}}</span></div>`;
+  if (node.displayName) html += `<div class="info-row"><span class="info-label">FX name</span><span class="info-value" style="font-size:10px;color:#8b949e">${{_esc(node.name)}}</span></div>`;
+  html += `<div class="info-row"><span class="info-label">Aten Op</span><span class="op-badge" style="background:${{node.color}}30;color:${{node.color}}">${{_esc(node.target)}}</span></div>`;
+  html += `<div class="info-row"><span class="info-label">FX Node Kind</span><span class="info-value">${{_esc(node.op)}}</span></div>`;
+  if (si.sourceFn) {{
+    const ftype = si.sourceFnType ? ` <span style="color:#8b949e">(${{_esc(si.sourceFnType)}})</span>` : '';
+    html += `<div class="info-row"><span class="info-label">Op Source</span><span class="info-value">${{_esc(si.sourceFn)}}${{ftype}}</span></div>`;
+  }}
+  if (si.modulePath) {{
+    const mtype = si.moduleType ? ` <span style="color:#8b949e">(${{_esc(si.moduleType)}})</span>` : '';
+    html += `<div class="info-row"><span class="info-label">Module</span><span class="info-value">${{_esc(si.modulePath)}}${{mtype}}</span></div>`;
+  }}
+  if (si.sourceCode) {{
+    html += `<div style="margin:4px 0;padding:6px 8px;background:#0d1117;border:1px solid #30363d;border-radius:4px;font-family:monospace;font-size:11px;color:#e6edf3;word-break:break-all;">${{_esc(si.sourceCode)}}</div>`;
+  }}
+  if (si.sourceFile) {{
+    const fname = si.sourceFile.split('/').pop();
+    html += `<div class="info-row"><span class="info-label">File</span><span class="info-value" style="font-size:10px">${{_esc(fname)}}:${{_esc(si.sourceLine || '?')}}</span></div>`;
+    html += `<div style="font-size:9px;color:#484f58;word-break:break-all;padding:2px 0;">${{_esc(si.sourceFile)}}</div>`;
+  }} else if (!si.sourceFn && !si.modulePath && node.sourceGroup) {{
+    html += `<div class="info-row"><span class="info-label">Source</span><span class="info-value">${{_esc(node.sourceGroup)}}</span></div>`;
+  }}
+  if (si.sourceFn || si.modulePath || si.sourceCode || si.sourceFile) {{
+    html += `<div style="border-bottom:1px solid #21262d;margin:8px 0;"></div>`;
+  }}
+  html += `<div class="info-row"><span class="info-label">Target</span><span class="info-value">${{_esc(node.target)}}</span></div>`;
+  if (node.meta.shape) html += `<div class="info-row"><span class="info-label">Shape</span><span class="info-value">${{_esc(node.meta.shape)}}</span></div>`;
+  if (node.meta.dtype) html += `<div class="info-row"><span class="info-label">Dtype</span><span class="info-value">${{_esc(node.meta.dtype)}}</span></div>`;
+
+  // Kernel badge
+  if (node.kernelGroup) {{
+    const kcolor = kernelColors[node.kernelGroup] || '#58a6ff';
+    const kg = KERNEL_GROUPS.find(k => k.name === node.kernelGroup);
+    html += `<h3>Triton Kernel</h3>`;
+    html += `<div class="info-row"><span class="info-label">Kernel</span><span class="op-badge" style="background:${{kcolor}}30;color:${{kcolor}}">${{_esc(node.kernelGroup)}}</span></div>`;
+    if (kg) {{
+      if (kg.type) html += `<div class="info-row"><span class="info-label">Type</span><span class="info-value">${{_esc(kg.type)}}</span></div>`;
+      if (kg.atenOps && kg.atenOps.length) html += `<div class="info-row"><span class="info-label">Fused ops</span><span class="info-value">${{_esc(kg.atenOps.join(', '))}}</span></div>`;
+      html += `<div class="info-row"><span class="info-label">Nodes</span><span class="info-value">${{kg.nodes.length}} aten ops fused</span></div>`;
+    }}
+  }}
+
+  const inputs = EDGES.filter(e => e.target === node.id).map(e => NODES[e.source]);
+  const paramInputs = inputs.filter(n => n.isParam);
+  const compInputs = inputs.filter(n => !n.isParam);
+  const outputs = EDGES.filter(e => e.source === node.id).map(e => NODES[e.target]);
+
+  if (compInputs.length) {{
+    html += `<h3>Inputs</h3>`;
+    compInputs.forEach(n => {{
+      html += `<div class="info-row"><span class="info-value" style="color:${{n.color}}">%${{_esc(_dn(n))}}</span><span class="info-label">${{_esc(n.target)}}</span></div>`;
+    }});
+  }}
+  if (paramInputs.length) {{
+    html += `<h3>Parameters (${{paramInputs.length}})</h3>`;
+    paramInputs.forEach(n => {{
+      const shape = n.meta.shape || '';
+      html += `<div class="info-row"><span class="info-value" style="color:#4CAF50;font-size:10px">%${{_esc(_dn(n))}}</span><span class="info-label">${{_esc(shape)}}</span></div>`;
+    }});
+  }}
+  if (outputs.length) {{
+    html += `<h3>Consumers</h3>`;
+    outputs.forEach(n => {{
+      html += `<div class="info-row"><span class="info-value" style="color:${{n.color}}">%${{_esc(_dn(n))}}</span><span class="info-label">${{_esc(n.target)}}</span></div>`;
+    }});
+  }}
+
+  if (node.stats) {{
+    html += `<h3>Tensor Values</h3>`;
+    html += `<div style="margin:6px 0;padding:8px;background:#0d1117;border:1px solid #30363d;border-radius:4px;font-family:'SF Mono',monospace;font-size:11px;color:#e6edf3;line-height:1.8;">`;
+    const s = node.stats;
+    const fmt = v => v == null ? '\u2014' : (typeof v === 'number' ? (Number.isInteger(v) ? v.toString() : v.toFixed(4)) : String(v));
+    const pct = v => v == null ? '\u2014' : (v * 100).toFixed(1) + '%';
+    const bool = v => v ? '<span style="color:#f85149">Yes</span>' : '<span style="color:#3fb950">No</span>';
+    html += `<span style="color:#8b949e">mean:</span> ${{fmt(s.mean)}}&nbsp;&nbsp;&nbsp;&nbsp;<span style="color:#8b949e">std:</span> ${{fmt(s.std)}}<br>`;
+    html += `<span style="color:#8b949e">min:</span> ${{fmt(s.min)}}&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;<span style="color:#8b949e">max:</span> ${{fmt(s.max)}}<br>`;
+    html += `<span style="color:#8b949e">abs_mean:</span> ${{fmt(s.abs_mean)}}&nbsp;&nbsp;<span style="color:#8b949e">%zeros:</span> ${{pct(s.pct_zero)}}<br>`;
+    if (s.has_nan !== undefined || s.has_inf !== undefined) {{
+      html += `<span style="color:#8b949e">has_nan:</span> ${{bool(s.has_nan)}}&nbsp;&nbsp;&nbsp;<span style="color:#8b949e">has_inf:</span> ${{bool(s.has_inf)}}<br>`;
+    }}
+    if (s.numel !== undefined) {{
+      html += `<span style="color:#8b949e">numel:</span> ${{fmt(s.numel)}}`;
+    }}
+    html += `</div>`;
+  }}
+
+  info.innerHTML = html;
+
+  // Navigate H5Web to this node's tensor (or group output link)
+  if (window.h5webNavigate && node.name) {{
+    const map = window.H5_NODE_MAP || {{}};
+    const sec = {{ module: 'module', kernel: 'triton', line: 'line' }}[groupType || 'line'];
+    const path = map[activeGraph + '/' + sec + ':' + node.name]
+              || map[sec + ':' + node.name]
+              || map[node.name]
+              || ('/tensors/' + node.name);
+    window.h5webNavigate(path);
+  }}
+}}
+
+// Search
+document.getElementById('search').addEventListener('input', e => {{
+  searchTerm = e.target.value.toLowerCase();
+  draw();
+}});
+
+function toggleSidebar() {{
+  const sb = document.getElementById('sidebar');
+  const btn = document.getElementById('btn-sidebar');
+  const visible = sb.style.display !== 'none';
+  sb.style.display = visible ? 'none' : '';
+  btn.classList.toggle('active', !visible);
+  resize(); draw();
+}}
+
+let h5Pos = 'left';
+const H5_POS_CYCLE = ['left', 'bottom', 'right', 'top'];
+
+function setH5Position(pos) {{
+  h5Pos = pos;
+  const outer = document.getElementById('outer');
+  const panel = document.getElementById('h5web-panel');
+  const drag = document.getElementById('h5web-drag');
+  const container = document.getElementById('container');
+  const isH = (pos === 'left' || pos === 'right');
+
+  outer.style.flexDirection = isH ? 'row' : 'column';
+
+  if (pos === 'left' || pos === 'top') {{
+    panel.style.order = -2;
+    drag.style.order = -1;
+    container.style.order = 0;
+  }} else {{
+    container.style.order = 0;
+    drag.style.order = 1;
+    panel.style.order = 2;
+  }}
+
+  if (isH) {{
+    const w = panel.style.width;
+    panel.style.height = '';
+    panel.style.width = w || '42vw';
+    drag.style.width = '5px';
+    drag.style.height = 'auto';
+    drag.style.cursor = 'ew-resize';
+  }} else {{
+    const h = panel.style.height;
+    panel.style.width = '';
+    panel.style.height = h || '35vh';
+    drag.style.width = 'auto';
+    drag.style.height = '5px';
+    drag.style.cursor = 'ns-resize';
+  }}
+
+  panel.style.borderLeft = '';
+  panel.style.borderRight = '';
+  panel.style.borderTop = '';
+  panel.style.borderBottom = '';
+  const bside = {{ left:'borderRight', right:'borderLeft', top:'borderBottom', bottom:'borderTop' }}[pos];
+  panel.style[bside] = '1px solid #30363d';
+
+  const lbl = document.getElementById('h5pos-btn');
+  if (lbl) lbl.textContent = '\u25a7 ' + pos[0].toUpperCase() + pos.slice(1);
+  resize(); fitView();
+}}
+
+function cycleH5Position() {{
+  setH5Position(H5_POS_CYCLE[(H5_POS_CYCLE.indexOf(h5Pos) + 1) % 4]);
+}}
+
+function toggleH5Panel() {{
+  const panel = document.getElementById('h5web-panel');
+  const drag = document.getElementById('h5web-drag');
+  const btn = document.getElementById('btn-h5web');
+  const visible = panel.style.display !== 'none' && panel.style.display !== '';
+  panel.style.display = visible ? 'none' : 'block';
+  drag.style.display = visible ? 'none' : 'block';
+  if (!visible) {{
+    const isH = (h5Pos === 'left' || h5Pos === 'right');
+    if (isH && !panel.style.width) panel.style.width = '42vw';
+    if (!isH && !panel.style.height) panel.style.height = '35vh';
+  }}
+  btn.classList.toggle('active', !visible);
+  resize(); fitView();
+}}
+</script>
+
+<script type="module">
+const H5WEB_ENABLED = {h5web_enabled};
+const EMBEDDED_H5_B64 = {embedded_h5_b64};
+window.H5_NODE_MAP = {h5_node_map_json};
+
+if (H5WEB_ENABLED) {{
+  const panel = document.getElementById('h5web-panel');
+  const drag = document.getElementById('h5web-drag');
+  const status = document.getElementById('h5web-status');
+  const navEl = document.getElementById('h5web-nav');
+  panel.style.display = 'block';
+  drag.style.display = 'block';
+  const h5btn = document.getElementById('btn-h5web');
+  h5btn.style.display = '';
+  h5btn.classList.add('active');
+  if (typeof setH5Position === 'function') setH5Position('left');
+  status.textContent = 'Loading H5Web from CDN\u2026';
+
+  // Resizable drag handle (position-aware)
+  let h5drag = false, h5startX = 0, h5startY = 0, h5startW = 0, h5startH = 0;
+  drag.addEventListener('mousedown', e => {{
+    h5drag = true;
+    h5startX = e.clientX; h5startY = e.clientY;
+    h5startW = panel.offsetWidth; h5startH = panel.offsetHeight;
+    e.preventDefault();
+  }});
+  document.addEventListener('mousemove', e => {{
+    if (!h5drag) return;
+    const isH = (h5Pos === 'left' || h5Pos === 'right');
+    if (isH) {{
+      const sign = h5Pos === 'left' ? 1 : -1;
+      panel.style.width = Math.max(200, h5startW + (e.clientX - h5startX) * sign) + 'px';
+    }} else {{
+      const sign = h5Pos === 'top' ? 1 : -1;
+      panel.style.height = Math.max(120, h5startH + (e.clientY - h5startY) * sign) + 'px';
+    }}
+    if (typeof resize === 'function') {{ resize(); draw(); }}
+  }});
+  document.addEventListener('mouseup', () => {{ h5drag = false; }});
+
+  let React, ReactDOM, H5App, H5WasmBufferProvider, H5WasmLocalFileProvider;
+  let h5Root = null, h5File = null, h5Buffer = null, currentPath = '/';
+
+  function render() {{
+    if (!h5Root || (!h5Buffer && !h5File)) return;
+    const key = currentPath + '_' + Date.now();
+    let provider;
+    if (h5Buffer) {{
+      provider = React.createElement(H5WasmBufferProvider, {{ buffer: h5Buffer, filename: 'embedded.h5' }},
+        React.createElement(H5App, {{ key, initialPath: currentPath, sidebarOpen: true }}));
+    }} else {{
+      provider = React.createElement(H5WasmLocalFileProvider, {{ file: h5File }},
+        React.createElement(H5App, {{ key, initialPath: currentPath, sidebarOpen: true }}));
+    }}
+    h5Root.render(provider);
+  }}
+
+  window.h5webNavigate = function(path) {{
+    if (!h5Root || (!h5Buffer && !h5File)) return;
+    currentPath = path;
+    navEl.textContent = path;
+    render();
+  }};
+
+  try {{
+    const CDN = 'https://esm.sh';
+    const shared = 'react@18.3.1,react-dom@18.3.1,three@0.181.0,@react-three/fiber@8.18.0';
+    const [reactMod, reactDomMod, appMod, wasmMod] = await Promise.all([
+      import(CDN + '/react@18.3.1'),
+      import(CDN + '/react-dom@18.3.1/client'),
+      import(CDN + '/@h5web/app@16.0.1?deps=' + shared),
+      import(CDN + '/@h5web/h5wasm@16.0.1?deps=' + shared),
+    ]);
+    React = reactMod.default || reactMod;
+    ReactDOM = reactDomMod;
+    H5App = appMod.App;
+    H5WasmBufferProvider = wasmMod.H5WasmBufferProvider;
+    H5WasmLocalFileProvider = wasmMod.H5WasmLocalFileProvider;
+
+    const link = document.createElement('link');
+    link.rel = 'stylesheet';
+    link.href = 'https://cdn.jsdelivr.net/npm/@h5web/app@16.0.1/dist/styles.css';
+    document.head.appendChild(link);
+
+    h5Root = ReactDOM.createRoot(document.getElementById('h5web-root'));
+    status.textContent = 'Ready';
+    status.className = 'h5w-status ok';
+
+    // Handle embedded H5
+    if (EMBEDDED_H5_B64) {{
+      const bin = atob(EMBEDDED_H5_B64);
+      const buf = new Uint8Array(bin.length);
+      for (let i = 0; i < bin.length; i++) buf[i] = bin.charCodeAt(i);
+      h5Buffer = buf.buffer;
+      status.textContent = 'Embedded H5 loaded';
+      render();
+    }}
+
+    // Handle user file upload
+    document.getElementById('h5web-file').addEventListener('change', e => {{
+      const f = e.target.files[0];
+      if (!f) return;
+      h5File = f;
+      h5Buffer = null;
+      status.textContent = f.name;
+      status.className = 'h5w-status ok';
+      currentPath = '/';
+      navEl.textContent = '';
+      render();
+    }});
+
+  }} catch (err) {{
+    console.error('H5Web load failed:', err);
+    status.textContent = 'H5Web unavailable (requires internet)';
+    status.className = 'h5w-status err';
+  }}
+}}
+</script>
+</body>
+</html>

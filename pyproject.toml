@@ -1,0 +1,39 @@
+[project]
+name = "torch-graph"
+version = "0.1.0"
+description = "Extract, visualize, and edit PyTorch TorchDynamo/FX compilation graphs"
+requires-python = ">=3.10"
+dependencies = [
+    "torch>=2.10",
+    "h5py",
+    "hdf5plugin",
+]
+
+[project.optional-dependencies]
+test = ["pytest"]
+nanochat = [
+    "datasets", "fastapi", "ipykernel", "kernels", "matplotlib", "psutil",
+    "python-dotenv", "regex", "rustbpe", "scipy", "tabulate", "tiktoken",
+    "tokenizers", "transformers", "uvicorn", "wandb", "zstandard", "pyarrow",
+]
+all = ["torch-graph[test,nanochat]"]
+
+[build-system]
+requires = ["setuptools>=68.0"]
+build-backend = "setuptools.build_meta"
+
+[tool.setuptools.packages.find]
+include = ["torch_graph*"]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+
+[[tool.uv.index]]
+name = "pytorch-cu130"
+url = "https://download.pytorch.org/whl/cu130"
+explicit = true
+
+[tool.uv.sources]
+torch = [{ index = "pytorch-cu130" }]
+torchvision = [{ index = "pytorch-cu130" }]
+torchaudio = [{ index = "pytorch-cu130" }]

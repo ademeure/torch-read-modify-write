@@ -9,7 +9,7 @@
     "name": "softcap",
     "median_ms": 71.07,
     "final_loss": 9.128914,
-    "description": "Fuse softcap fwd+bwd Triton kernels"
+    "description": "Fuse softcap fwd+bwd Triton"
   },
   {
     "name": "lambda",
@@ -30,12 +30,6 @@
     "description": "Fuse RoPE forward Triton (16x)"
   },
   {
-    "name": "dedup",
-    "median_ms": 63.05,
-    "final_loss": 9.126553,
-    "description": "Dedup neg(sin)+mask"
-  },
-  {
     "name": "sqrelu_fwd",
     "median_ms": 58.87,
     "final_loss": 9.126896,
@@ -45,6 +39,12 @@
     "name": "elim_cast",
     "median_ms": 55.80,
     "final_loss": 9.127618,
-    "description": "Fold bf16\u2192fp32 cast into sqrelu_bwd kernel (8x)"
+    "description": "Fold bf16\u2192fp32 into sqrelu_bwd (8x)"
+  },
+  {
+    "name": "rope_bwd",
+    "median_ms": 51.75,
+    "final_loss": 9.127485,
+    "description": "Fuse RoPE backward Triton (16x)"
   }
 ]

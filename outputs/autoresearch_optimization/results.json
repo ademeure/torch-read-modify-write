@@ -21,30 +21,36 @@
     "name": "softcap_fusion",
     "median_ms": 71.0664,
     "final_loss": 9.128914,
-    "description": "Fuse softcap fwd (bf16\u2192fp32+div+tanh+mul) and bwd (mul+tanh_bwd+div+to_bf16) into Triton kernels"
+    "description": "Fuse softcap fwd+bwd into Triton kernels"
   },
   {
     "name": "lambda_scale",
     "median_ms": 69.8046,
     "final_loss": 9.129214,
-    "description": "Fuse lambda scaling (a*x + b*x0) into single Triton kernel (8 instances)"
+    "description": "Fuse lambda scaling (a*x + b*x0) Triton kernel (8x)"
   },
   {
     "name": "sqrelu_bwd",
     "median_ms": 65.297,
     "final_loss": 9.128935,
-    "description": "Fuse squared relu backward (pow+mul+mul+to_copy+threshold_bwd \u2192 1 kernel, 8 instances)"
+    "description": "Fuse squared relu backward Triton kernel (8x)"
   },
   {
     "name": "rope_fwd",
     "median_ms": 63.3204,
     "final_loss": 9.128079,
-    "description": "Fuse forward RoPE (slice+mul+neg+mul+add+cat \u2192 1 Triton kernel, 16 instances)"
+    "description": "Fuse forward RoPE Triton kernel (16x)"
   },
   {
     "name": "dedup_ops",
     "median_ms": 63.0517,
     "final_loss": 9.126553,
-    "description": "Deduplicate neg(sin) (16\u21921) and attention mask (6\u21921) computations"
+    "description": "Deduplicate neg(sin) and attention mask"
+  },
+  {
+    "name": "sqrelu_fwd",
+    "median_ms": 58.8738,
+    "final_loss": 9.126896,
+    "description": "Fuse squared relu forward (relu+cast+pow+cast \u2192 1 kernel, 8x)"
   }
 ]

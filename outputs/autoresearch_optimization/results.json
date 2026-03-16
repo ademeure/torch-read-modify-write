@@ -40,5 +40,11 @@
     "median_ms": 63.3204,
     "final_loss": 9.128079,
     "description": "Fuse forward RoPE (slice+mul+neg+mul+add+cat \u2192 1 Triton kernel, 16 instances)"
+  },
+  {
+    "name": "dedup_ops",
+    "median_ms": 63.0517,
+    "final_loss": 9.126553,
+    "description": "Deduplicate neg(sin) (16\u21921) and attention mask (6\u21921) computations"
   }
 ]

@@ -670,6 +670,20 @@ def forward(
     # cos_sin = self.cos[:, :T], self.sin[:, :T]
     getitem_slice: 'bfloat16[1, 2048, 1, 64]' = aten.slice.Tensor(cos, 1, 0, 2048)  # strides=(1310720, 64, 64, 1), contiguous=True, view=True
     getitem_1_slice: 'bfloat16[1, 2048, 1, 64]' = aten.slice.Tensor(sin, 1, 0, 2048)  # strides=(1310720, 64, 64, 1), contiguous=True, view=True
+    # Precompute -sin once (reused for all 16 RoPE neg computations)
+    _neg_sin: 'bfloat16[1, 2048, 1, 64]' = aten.neg(getitem_1_slice)
+    # Precompute attention mask once (reused for 6 windowed attention layers)
+    _arange = aten.arange(2048, device=torch.device('cuda:0'), pin_memory=False)
+    _row_idx = aten.unsqueeze(_arange, 1)
+    _row_idx_shifted = aten.add.Tensor(_row_idx, 0)
+    _col_idx = aten.unsqueeze(_arange, 0)
+    _causal = aten.le.Tensor(_col_idx, _row_idx_shifted)
+    _window_dist = aten.sub.Tensor(_row_idx_shifted, _col_idx)
+    _in_window = aten.le.Scalar(_window_dist, 1024)
+    _mask_bool = aten.bitwise_and.Tensor(_causal, _in_window)
+    _neg_inf = aten.scalar_tensor(-65504.0, dtype=torch.bfloat16, device=torch.device('cuda:0'))
+    _zero = aten.scalar_tensor(0.0, dtype=torch.bfloat16, layout=torch.strided, device=torch.device('cuda:0'))
+    _attn_mask: 'bfloat16[2048, 2048]' = aten.where.self(_mask_bool, _zero, _neg_inf)
 
     # ════════════════════════════════════════════════════════════════
     # self.transformer.wte
@@ -747,10 +761,10 @@ def forward(
     # v = self.c_v(x).view(B, T, self.n_kv_head, self.head_dim)
     h0_attn_view_2: 'bfloat16[32, 2048, 4, 128]' = aten.view(h0_attn_c_v__unsafe_view, [32, 2048, 4, 128])  # strides=(1048576, 512, 128, 1), contiguous=True, view=True
     # FUSED: RoPE for Q (slice+mul+neg+mul+add+cat → single Triton kernel)
-    h0_attn_neg: 'bfloat16[1, 2048, 1, 64]' = aten.neg(getitem_1_slice)  # saved for backward
+    h0_attn_neg: 'bfloat16[1, 2048, 1, 64]' = _neg_sin  # saved for backward
     h0_attn_cat: 'bfloat16[32, 2048, 4, 128]' = triton_rope_fwd(h0_attn_view, getitem_slice, getitem_1_slice)
     # FUSED: RoPE for K
-    h0_attn_neg_1: 'bfloat16[1, 2048, 1, 64]' = aten.neg(getitem_1_slice)  # saved for backward
+    h0_attn_neg_1: 'bfloat16[1, 2048, 1, 64]' = _neg_sin  # saved for backward
     h0_attn_cat_1: 'bfloat16[32, 2048, 4, 128]' = triton_rope_fwd(h0_attn_view_1, getitem_slice, getitem_1_slice)
     h0_attn__fused_rms_norm = aten._fused_rms_norm(h0_attn_cat, [128], None, None)  # out0: strides=(1048576, 512, 128, 1), contiguous=True; out1: strides=(8192, 4, 1, 1), contiguous=True, view=False
     h0_attn_getitem: 'bfloat16[32, 2048, 4, 128]' = operator.getitem(h0_attn__fused_rms_norm, 0)  # strides=(1048576, 512, 128, 1), contiguous=True, view=True
@@ -763,18 +777,7 @@ def forward(
     h0_attn_transpose: 'bfloat16[32, 4, 2048, 128]' = aten.transpose.int(h0_attn_getitem, 1, 2)  # strides=(1048576, 128, 512, 1), contiguous=False, view=True
     h0_attn_transpose_1: 'bfloat16[32, 4, 2048, 128]' = aten.transpose.int(h0_attn_getitem_2, 1, 2)  # strides=(1048576, 128, 512, 1), contiguous=False, view=True
     h0_attn_transpose_2: 'bfloat16[32, 4, 2048, 128]' = aten.transpose.int(h0_attn_view_2, 1, 2)  # strides=(1048576, 128, 512, 1), contiguous=False, view=True
-    h0_attn_arange: 'int64[2048]' = aten.arange(2048, device=torch.device('cuda:0'), pin_memory=False)  # strides=(1,), contiguous=True, view=False
-    h0_attn_unsqueeze: 'int64[2048, 1]' = aten.unsqueeze(h0_attn_arange, 1)  # strides=(1, 1), contiguous=True, view=True
-    h0_attn_add_4: 'int64[2048, 1]' = aten.add.Tensor(h0_attn_unsqueeze, 0)  # strides=(1, 1), contiguous=True, view=False
-    h0_attn_arange_1: 'int64[2048]' = aten.arange(2048, device=torch.device('cuda:0'), pin_memory=False)  # strides=(1,), contiguous=True, view=False
-    h0_attn_unsqueeze_1: 'int64[1, 2048]' = aten.unsqueeze(h0_attn_arange_1, 0)  # strides=(2048, 1), contiguous=True, view=True
-    h0_attn_le: 'bool[2048, 2048]' = aten.le.Tensor(h0_attn_unsqueeze_1, h0_attn_add_4)  # strides=(2048, 1), contiguous=True, view=False
-    h0_attn_sub: 'int64[2048, 2048]' = aten.sub.Tensor(h0_attn_add_4, h0_attn_unsqueeze_1)  # strides=(2048, 1), contiguous=True, view=False
-    h0_attn_le_1: 'bool[2048, 2048]' = aten.le.Scalar(h0_attn_sub, 1024)  # strides=(2048, 1), contiguous=True, view=False
-    h0_attn_bitwise_and: 'bool[2048, 2048]' = aten.bitwise_and.Tensor(h0_attn_le, h0_attn_le_1)  # strides=(2048, 1), contiguous=True, view=False
-    h0_attn_scalar_tensor: 'bfloat16[]' = aten.scalar_tensor(-65504.0, dtype=torch.bfloat16, device=torch.device('cuda:0'))  # strides=(), contiguous=True, view=False
-    h0_attn_scalar_tensor_1: 'bfloat16[]' = aten.scalar_tensor(0.0, dtype=torch.bfloat16, layout=torch.strided, device=torch.device('cuda:0'))  # strides=(), contiguous=True, view=False
-    h0_attn_where: 'bfloat16[2048, 2048]' = aten.where.self(h0_attn_bitwise_and, h0_attn_scalar_tensor_1, h0_attn_scalar_tensor)  # strides=(2048, 1), contiguous=True, view=False
+    h0_attn_where = _attn_mask  # reuse precomputed mask
     h0_attn__scaled_dot_product_cudnn_attention = aten._scaled_dot_product_cudnn_attention(h0_attn_transpose, h0_attn_transpose_1, h0_attn_transpose_2, h0_attn_where, True)  # out0: strides=(1048576, 128, 512, 1), contiguous=False; out1: strides=(8192, 2048, 1, 1), contiguous=True; out6: strides=(), contiguous=True; out7: strides=(), contiguous=True, view=False
     h0_attn_getitem_4: 'bfloat16[32, 4, 2048, 128]' = operator.getitem(h0_attn__scaled_dot_product_cudnn_attention, 0)  # strides=(1048576, 128, 512, 1), contiguous=False, view=True
     h0_attn_getitem_5: 'float32[32, 4, 2048, 1]' = operator.getitem(h0_attn__scaled_dot_product_cudnn_attention, 1)  # strides=(8192, 2048, 1, 1), contiguous=True, view=True
@@ -923,10 +926,10 @@ def forward(
     h1_attn_mul_1: 'bfloat16[32, 2048, 4, 128]' = aten.mul.Tensor(h1_attn_unsqueeze, h1_attn_view_3)  # strides=(1048576, 512, 128, 1), contiguous=True, view=False
     h1_attn_add: 'bfloat16[32, 2048, 4, 128]' = aten.add.Tensor(h1_attn_view_2, h1_attn_mul_1)  # strides=(1048576, 512, 128, 1), contiguous=True, view=False
     # FUSED: RoPE for Q
-    h1_attn_neg: 'bfloat16[1, 2048, 1, 64]' = aten.neg(getitem_1_slice)
+    h1_attn_neg: 'bfloat16[1, 2048, 1, 64]' = _neg_sin
     h1_attn_cat: 'bfloat16[32, 2048, 4, 128]' = triton_rope_fwd(h1_attn_view, getitem_slice, getitem_1_slice)
     # FUSED: RoPE for K
-    h1_attn_neg_1: 'bfloat16[1, 2048, 1, 64]' = aten.neg(getitem_1_slice)
+    h1_attn_neg_1: 'bfloat16[1, 2048, 1, 64]' = _neg_sin
     h1_attn_cat_1: 'bfloat16[32, 2048, 4, 128]' = triton_rope_fwd(h1_attn_view_1, getitem_slice, getitem_1_slice)
     h1_attn__fused_rms_norm = aten._fused_rms_norm(h1_attn_cat, [128], None, None)  # out0: strides=(1048576, 512, 128, 1), contiguous=True; out1: strides=(8192, 4, 1, 1), contiguous=True, view=False
     h1_attn_getitem: 'bfloat16[32, 2048, 4, 128]' = operator.getitem(h1_attn__fused_rms_norm, 0)  # strides=(1048576, 512, 128, 1), contiguous=True, view=True
@@ -939,18 +942,7 @@ def forward(
     h1_attn_transpose: 'bfloat16[32, 4, 2048, 128]' = aten.transpose.int(h1_attn_getitem, 1, 2)  # strides=(1048576, 128, 512, 1), contiguous=False, view=True
     h1_attn_transpose_1: 'bfloat16[32, 4, 2048, 128]' = aten.transpose.int(h1_attn_getitem_2, 1, 2)  # strides=(1048576, 128, 512, 1), contiguous=False, view=True
     h1_attn_transpose_2: 'bfloat16[32, 4, 2048, 128]' = aten.transpose.int(h1_attn_add, 1, 2)  # strides=(1048576, 128, 512, 1), contiguous=False, view=True
-    h1_attn_arange: 'int64[2048]' = aten.arange(2048, device=torch.device('cuda:0'), pin_memory=False)  # strides=(1,), contiguous=True, view=False
-    h1_attn_unsqueeze_1: 'int64[2048, 1]' = aten.unsqueeze(h1_attn_arange, 1)  # strides=(1, 1), contiguous=True, view=True
-    h1_attn_add_5: 'int64[2048, 1]' = aten.add.Tensor(h1_attn_unsqueeze_1, 0)  # strides=(1, 1), contiguous=True, view=False
-    h1_attn_arange_1: 'int64[2048]' = aten.arange(2048, device=torch.device('cuda:0'), pin_memory=False)  # strides=(1,), contiguous=True, view=False
-    h1_attn_unsqueeze_2: 'int64[1, 2048]' = aten.unsqueeze(h1_attn_arange_1, 0)  # strides=(2048, 1), contiguous=True, view=True
-    h1_attn_le: 'bool[2048, 2048]' = aten.le.Tensor(h1_attn_unsqueeze_2, h1_attn_add_5)  # strides=(2048, 1), contiguous=True, view=False
-    h1_attn_sub: 'int64[2048, 2048]' = aten.sub.Tensor(h1_attn_add_5, h1_attn_unsqueeze_2)  # strides=(2048, 1), contiguous=True, view=False
-    h1_attn_le_1: 'bool[2048, 2048]' = aten.le.Scalar(h1_attn_sub, 1024)  # strides=(2048, 1), contiguous=True, view=False
-    h1_attn_bitwise_and: 'bool[2048, 2048]' = aten.bitwise_and.Tensor(h1_attn_le, h1_attn_le_1)  # strides=(2048, 1), contiguous=True, view=False
-    h1_attn_scalar_tensor: 'bfloat16[]' = aten.scalar_tensor(-65504.0, dtype=torch.bfloat16, device=torch.device('cuda:0'))  # strides=(), contiguous=True, view=False
-    h1_attn_scalar_tensor_1: 'bfloat16[]' = aten.scalar_tensor(0.0, dtype=torch.bfloat16, layout=torch.strided, device=torch.device('cuda:0'))  # strides=(), contiguous=True, view=False
-    h1_attn_where: 'bfloat16[2048, 2048]' = aten.where.self(h1_attn_bitwise_and, h1_attn_scalar_tensor_1, h1_attn_scalar_tensor)  # strides=(2048, 1), contiguous=True, view=False
+    h1_attn_where = _attn_mask  # reuse precomputed mask
     h1_attn__scaled_dot_product_cudnn_attention = aten._scaled_dot_product_cudnn_attention(h1_attn_transpose, h1_attn_transpose_1, h1_attn_transpose_2, h1_attn_where, True)  # out0: strides=(1048576, 128, 512, 1), contiguous=False; out1: strides=(8192, 2048, 1, 1), contiguous=True; out6: strides=(), contiguous=True; out7: strides=(), contiguous=True, view=False
     h1_attn_getitem_4: 'bfloat16[32, 4, 2048, 128]' = operator.getitem(h1_attn__scaled_dot_product_cudnn_attention, 0)  # strides=(1048576, 128, 512, 1), contiguous=False, view=True
     h1_attn_getitem_5: 'float32[32, 4, 2048, 1]' = operator.getitem(h1_attn__scaled_dot_product_cudnn_attention, 1)  # strides=(8192, 2048, 1, 1), contiguous=True, view=True
@@ -1070,10 +1062,10 @@ def forward(
     # v = self.c_v(x).view(B, T, self.n_kv_head, self.head_dim)
     h2_attn_view_2: 'bfloat16[32, 2048, 4, 128]' = aten.view(h2_attn_c_v__unsafe_view, [32, 2048, 4, 128])  # strides=(1048576, 512, 128, 1), contiguous=True, view=True
     # FUSED: RoPE for Q
-    h2_attn_neg: 'bfloat16[1, 2048, 1, 64]' = aten.neg(getitem_1_slice)
+    h2_attn_neg: 'bfloat16[1, 2048, 1, 64]' = _neg_sin
     h2_attn_cat: 'bfloat16[32, 2048, 4, 128]' = triton_rope_fwd(h2_attn_view, getitem_slice, getitem_1_slice)
     # FUSED: RoPE for K
-    h2_attn_neg_1: 'bfloat16[1, 2048, 1, 64]' = aten.neg(getitem_1_slice)
+    h2_attn_neg_1: 'bfloat16[1, 2048, 1, 64]' = _neg_sin
     h2_attn_cat_1: 'bfloat16[32, 2048, 4, 128]' = triton_rope_fwd(h2_attn_view_1, getitem_slice, getitem_1_slice)
     h2_attn__fused_rms_norm = aten._fused_rms_norm(h2_attn_cat, [128], None, None)  # out0: strides=(1048576, 512, 128, 1), contiguous=True; out1: strides=(8192, 4, 1, 1), contiguous=True, view=False
     h2_attn_getitem: 'bfloat16[32, 2048, 4, 128]' = operator.getitem(h2_attn__fused_rms_norm, 0)  # strides=(1048576, 512, 128, 1), contiguous=True, view=True
@@ -1086,18 +1078,7 @@ def forward(
     h2_attn_transpose: 'bfloat16[32, 4, 2048, 128]' = aten.transpose.int(h2_attn_getitem, 1, 2)  # strides=(1048576, 128, 512, 1), contiguous=False, view=True
     h2_attn_transpose_1: 'bfloat16[32, 4, 2048, 128]' = aten.transpose.int(h2_attn_getitem_2, 1, 2)  # strides=(1048576, 128, 512, 1), contiguous=False, view=True
     h2_attn_transpose_2: 'bfloat16[32, 4, 2048, 128]' = aten.transpose.int(h2_attn_view_2, 1, 2)  # strides=(1048576, 128, 512, 1), contiguous=False, view=True
-    h2_attn_arange: 'int64[2048]' = aten.arange(2048, device=torch.device('cuda:0'), pin_memory=False)  # strides=(1,), contiguous=True, view=False
-    h2_attn_unsqueeze: 'int64[2048, 1]' = aten.unsqueeze(h2_attn_arange, 1)  # strides=(1, 1), contiguous=True, view=True
-    h2_attn_add_4: 'int64[2048, 1]' = aten.add.Tensor(h2_attn_unsqueeze, 0)  # strides=(1, 1), contiguous=True, view=False
-    h2_attn_arange_1: 'int64[2048]' = aten.arange(2048, device=torch.device('cuda:0'), pin_memory=False)  # strides=(1,), contiguous=True, view=False
-    h2_attn_unsqueeze_1: 'int64[1, 2048]' = aten.unsqueeze(h2_attn_arange_1, 0)  # strides=(2048, 1), contiguous=True, view=True
-    h2_attn_le: 'bool[2048, 2048]' = aten.le.Tensor(h2_attn_unsqueeze_1, h2_attn_add_4)  # strides=(2048, 1), contiguous=True, view=False
-    h2_attn_sub: 'int64[2048, 2048]' = aten.sub.Tensor(h2_attn_add_4, h2_attn_unsqueeze_1)  # strides=(2048, 1), contiguous=True, view=False
-    h2_attn_le_1: 'bool[2048, 2048]' = aten.le.Scalar(h2_attn_sub, 1024)  # strides=(2048, 1), contiguous=True, view=False
-    h2_attn_bitwise_and: 'bool[2048, 2048]' = aten.bitwise_and.Tensor(h2_attn_le, h2_attn_le_1)  # strides=(2048, 1), contiguous=True, view=False
-    h2_attn_scalar_tensor: 'bfloat16[]' = aten.scalar_tensor(-65504.0, dtype=torch.bfloat16, device=torch.device('cuda:0'))  # strides=(), contiguous=True, view=False
-    h2_attn_scalar_tensor_1: 'bfloat16[]' = aten.scalar_tensor(0.0, dtype=torch.bfloat16, layout=torch.strided, device=torch.device('cuda:0'))  # strides=(), contiguous=True, view=False
-    h2_attn_where: 'bfloat16[2048, 2048]' = aten.where.self(h2_attn_bitwise_and, h2_attn_scalar_tensor_1, h2_attn_scalar_tensor)  # strides=(2048, 1), contiguous=True, view=False
+    h2_attn_where = _attn_mask  # reuse precomputed mask
     h2_attn__scaled_dot_product_cudnn_attention = aten._scaled_dot_product_cudnn_attention(h2_attn_transpose, h2_attn_transpose_1, h2_attn_transpose_2, h2_attn_where, True)  # out0: strides=(1048576, 128, 512, 1), contiguous=False; out1: strides=(8192, 2048, 1, 1), contiguous=True; out6: strides=(), contiguous=True; out7: strides=(), contiguous=True, view=False
     h2_attn_getitem_4: 'bfloat16[32, 4, 2048, 128]' = operator.getitem(h2_attn__scaled_dot_product_cudnn_attention, 0)  # strides=(1048576, 128, 512, 1), contiguous=False, view=True
     h2_attn_getitem_5: 'float32[32, 4, 2048, 1]' = operator.getitem(h2_attn__scaled_dot_product_cudnn_attention, 1)  # strides=(8192, 2048, 1, 1), contiguous=True, view=True
@@ -1246,10 +1227,10 @@ def forward(
     h3_attn_mul_1: 'bfloat16[32, 2048, 4, 128]' = aten.mul.Tensor(h3_attn_unsqueeze, h3_attn_view_3)  # strides=(1048576, 512, 128, 1), contiguous=True, view=False
     h3_attn_add: 'bfloat16[32, 2048, 4, 128]' = aten.add.Tensor(h3_attn_view_2, h3_attn_mul_1)  # strides=(1048576, 512, 128, 1), contiguous=True, view=False
     # FUSED: RoPE for Q
-    h3_attn_neg: 'bfloat16[1, 2048, 1, 64]' = aten.neg(getitem_1_slice)
+    h3_attn_neg: 'bfloat16[1, 2048, 1, 64]' = _neg_sin
     h3_attn_cat: 'bfloat16[32, 2048, 4, 128]' = triton_rope_fwd(h3_attn_view, getitem_slice, getitem_1_slice)
     # FUSED: RoPE for K
-    h3_attn_neg_1: 'bfloat16[1, 2048, 1, 64]' = aten.neg(getitem_1_slice)
+    h3_attn_neg_1: 'bfloat16[1, 2048, 1, 64]' = _neg_sin
     h3_attn_cat_1: 'bfloat16[32, 2048, 4, 128]' = triton_rope_fwd(h3_attn_view_1, getitem_slice, getitem_1_slice)
     h3_attn__fused_rms_norm = aten._fused_rms_norm(h3_attn_cat, [128], None, None)  # out0: strides=(1048576, 512, 128, 1), contiguous=True; out1: strides=(8192, 4, 1, 1), contiguous=True, view=False
     h3_attn_getitem: 'bfloat16[32, 2048, 4, 128]' = operator.getitem(h3_attn__fused_rms_norm, 0)  # strides=(1048576, 512, 128, 1), contiguous=True, view=True
@@ -1381,10 +1362,10 @@ def forward(
     # v = self.c_v(x).view(B, T, self.n_kv_head, self.head_dim)
     h4_attn_view_2: 'bfloat16[32, 2048, 4, 128]' = aten.view(h4_attn_c_v__unsafe_view, [32, 2048, 4, 128])  # strides=(1048576, 512, 128, 1), contiguous=True, view=True
     # FUSED: RoPE for Q
-    h4_attn_neg: 'bfloat16[1, 2048, 1, 64]' = aten.neg(getitem_1_slice)
+    h4_attn_neg: 'bfloat16[1, 2048, 1, 64]' = _neg_sin
     h4_attn_cat: 'bfloat16[32, 2048, 4, 128]' = triton_rope_fwd(h4_attn_view, getitem_slice, getitem_1_slice)
     # FUSED: RoPE for K
-    h4_attn_neg_1: 'bfloat16[1, 2048, 1, 64]' = aten.neg(getitem_1_slice)
+    h4_attn_neg_1: 'bfloat16[1, 2048, 1, 64]' = _neg_sin
     h4_attn_cat_1: 'bfloat16[32, 2048, 4, 128]' = triton_rope_fwd(h4_attn_view_1, getitem_slice, getitem_1_slice)
     h4_attn__fused_rms_norm = aten._fused_rms_norm(h4_attn_cat, [128], None, None)  # out0: strides=(1048576, 512, 128, 1), contiguous=True; out1: strides=(8192, 4, 1, 1), contiguous=True, view=False
     h4_attn_getitem: 'bfloat16[32, 2048, 4, 128]' = operator.getitem(h4_attn__fused_rms_norm, 0)  # strides=(1048576, 512, 128, 1), contiguous=True, view=True
@@ -1397,18 +1378,7 @@ def forward(
     h4_attn_transpose: 'bfloat16[32, 4, 2048, 128]' = aten.transpose.int(h4_attn_getitem, 1, 2)  # strides=(1048576, 128, 512, 1), contiguous=False, view=True
     h4_attn_transpose_1: 'bfloat16[32, 4, 2048, 128]' = aten.transpose.int(h4_attn_getitem_2, 1, 2)  # strides=(1048576, 128, 512, 1), contiguous=False, view=True
     h4_attn_transpose_2: 'bfloat16[32, 4, 2048, 128]' = aten.transpose.int(h4_attn_view_2, 1, 2)  # strides=(1048576, 128, 512, 1), contiguous=False, view=True
-    h4_attn_arange: 'int64[2048]' = aten.arange(2048, device=torch.device('cuda:0'), pin_memory=False)  # strides=(1,), contiguous=True, view=False
-    h4_attn_unsqueeze: 'int64[2048, 1]' = aten.unsqueeze(h4_attn_arange, 1)  # strides=(1, 1), contiguous=True, view=True
-    h4_attn_add_4: 'int64[2048, 1]' = aten.add.Tensor(h4_attn_unsqueeze, 0)  # strides=(1, 1), contiguous=True, view=False
-    h4_attn_arange_1: 'int64[2048]' = aten.arange(2048, device=torch.device('cuda:0'), pin_memory=False)  # strides=(1,), contiguous=True, view=False
-    h4_attn_unsqueeze_1: 'int64[1, 2048]' = aten.unsqueeze(h4_attn_arange_1, 0)  # strides=(2048, 1), contiguous=True, view=True
-    h4_attn_le: 'bool[2048, 2048]' = aten.le.Tensor(h4_attn_unsqueeze_1, h4_attn_add_4)  # strides=(2048, 1), contiguous=True, view=False
-    h4_attn_sub: 'int64[2048, 2048]' = aten.sub.Tensor(h4_attn_add_4, h4_attn_unsqueeze_1)  # strides=(2048, 1), contiguous=True, view=False
-    h4_attn_le_1: 'bool[2048, 2048]' = aten.le.Scalar(h4_attn_sub, 1024)  # strides=(2048, 1), contiguous=True, view=False
-    h4_attn_bitwise_and: 'bool[2048, 2048]' = aten.bitwise_and.Tensor(h4_attn_le, h4_attn_le_1)  # strides=(2048, 1), contiguous=True, view=False
-    h4_attn_scalar_tensor: 'bfloat16[]' = aten.scalar_tensor(-65504.0, dtype=torch.bfloat16, device=torch.device('cuda:0'))  # strides=(), contiguous=True, view=False
-    h4_attn_scalar_tensor_1: 'bfloat16[]' = aten.scalar_tensor(0.0, dtype=torch.bfloat16, layout=torch.strided, device=torch.device('cuda:0'))  # strides=(), contiguous=True, view=False
-    h4_attn_where: 'bfloat16[2048, 2048]' = aten.where.self(h4_attn_bitwise_and, h4_attn_scalar_tensor_1, h4_attn_scalar_tensor)  # strides=(2048, 1), contiguous=True, view=False
+    h4_attn_where = _attn_mask  # reuse precomputed mask
     h4_attn__scaled_dot_product_cudnn_attention = aten._scaled_dot_product_cudnn_attention(h4_attn_transpose, h4_attn_transpose_1, h4_attn_transpose_2, h4_attn_where, True)  # out0: strides=(1048576, 128, 512, 1), contiguous=False; out1: strides=(8192, 2048, 1, 1), contiguous=True; out6: strides=(), contiguous=True; out7: strides=(), contiguous=True, view=False
     h4_attn_getitem_4: 'bfloat16[32, 4, 2048, 128]' = operator.getitem(h4_attn__scaled_dot_product_cudnn_attention, 0)  # strides=(1048576, 128, 512, 1), contiguous=False, view=True
     h4_attn_getitem_5: 'float32[32, 4, 2048, 1]' = operator.getitem(h4_attn__scaled_dot_product_cudnn_attention, 1)  # strides=(8192, 2048, 1, 1), contiguous=True, view=True
@@ -1557,10 +1527,10 @@ def forward(
     h5_attn_mul_1: 'bfloat16[32, 2048, 4, 128]' = aten.mul.Tensor(h5_attn_unsqueeze, h5_attn_view_3)  # strides=(1048576, 512, 128, 1), contiguous=True, view=False
     h5_attn_add: 'bfloat16[32, 2048, 4, 128]' = aten.add.Tensor(h5_attn_view_2, h5_attn_mul_1)  # strides=(1048576, 512, 128, 1), contiguous=True, view=False
     # FUSED: RoPE for Q
-    h5_attn_neg: 'bfloat16[1, 2048, 1, 64]' = aten.neg(getitem_1_slice)
+    h5_attn_neg: 'bfloat16[1, 2048, 1, 64]' = _neg_sin
     h5_attn_cat: 'bfloat16[32, 2048, 4, 128]' = triton_rope_fwd(h5_attn_view, getitem_slice, getitem_1_slice)
     # FUSED: RoPE for K
-    h5_attn_neg_1: 'bfloat16[1, 2048, 1, 64]' = aten.neg(getitem_1_slice)
+    h5_attn_neg_1: 'bfloat16[1, 2048, 1, 64]' = _neg_sin
     h5_attn_cat_1: 'bfloat16[32, 2048, 4, 128]' = triton_rope_fwd(h5_attn_view_1, getitem_slice, getitem_1_slice)
     h5_attn__fused_rms_norm = aten._fused_rms_norm(h5_attn_cat, [128], None, None)  # out0: strides=(1048576, 512, 128, 1), contiguous=True; out1: strides=(8192, 4, 1, 1), contiguous=True, view=False
     h5_attn_getitem: 'bfloat16[32, 2048, 4, 128]' = operator.getitem(h5_attn__fused_rms_norm, 0)  # strides=(1048576, 512, 128, 1), contiguous=True, view=True
@@ -1573,18 +1543,7 @@ def forward(
     h5_attn_transpose: 'bfloat16[32, 4, 2048, 128]' = aten.transpose.int(h5_attn_getitem, 1, 2)  # strides=(1048576, 128, 512, 1), contiguous=False, view=True
     h5_attn_transpose_1: 'bfloat16[32, 4, 2048, 128]' = aten.transpose.int(h5_attn_getitem_2, 1, 2)  # strides=(1048576, 128, 512, 1), contiguous=False, view=True
     h5_attn_transpose_2: 'bfloat16[32, 4, 2048, 128]' = aten.transpose.int(h5_attn_add, 1, 2)  # strides=(1048576, 128, 512, 1), contiguous=False, view=True
-    h5_attn_arange: 'int64[2048]' = aten.arange(2048, device=torch.device('cuda:0'), pin_memory=False)  # strides=(1,), contiguous=True, view=False
-    h5_attn_unsqueeze_1: 'int64[2048, 1]' = aten.unsqueeze(h5_attn_arange, 1)  # strides=(1, 1), contiguous=True, view=True
-    h5_attn_add_5: 'int64[2048, 1]' = aten.add.Tensor(h5_attn_unsqueeze_1, 0)  # strides=(1, 1), contiguous=True, view=False
-    h5_attn_arange_1: 'int64[2048]' = aten.arange(2048, device=torch.device('cuda:0'), pin_memory=False)  # strides=(1,), contiguous=True, view=False
-    h5_attn_unsqueeze_2: 'int64[1, 2048]' = aten.unsqueeze(h5_attn_arange_1, 0)  # strides=(2048, 1), contiguous=True, view=True
-    h5_attn_le: 'bool[2048, 2048]' = aten.le.Tensor(h5_attn_unsqueeze_2, h5_attn_add_5)  # strides=(2048, 1), contiguous=True, view=False
-    h5_attn_sub: 'int64[2048, 2048]' = aten.sub.Tensor(h5_attn_add_5, h5_attn_unsqueeze_2)  # strides=(2048, 1), contiguous=True, view=False
-    h5_attn_le_1: 'bool[2048, 2048]' = aten.le.Scalar(h5_attn_sub, 1024)  # strides=(2048, 1), contiguous=True, view=False
-    h5_attn_bitwise_and: 'bool[2048, 2048]' = aten.bitwise_and.Tensor(h5_attn_le, h5_attn_le_1)  # strides=(2048, 1), contiguous=True, view=False
-    h5_attn_scalar_tensor: 'bfloat16[]' = aten.scalar_tensor(-65504.0, dtype=torch.bfloat16, device=torch.device('cuda:0'))  # strides=(), contiguous=True, view=False
-    h5_attn_scalar_tensor_1: 'bfloat16[]' = aten.scalar_tensor(0.0, dtype=torch.bfloat16, layout=torch.strided, device=torch.device('cuda:0'))  # strides=(), contiguous=True, view=False
-    h5_attn_where: 'bfloat16[2048, 2048]' = aten.where.self(h5_attn_bitwise_and, h5_attn_scalar_tensor_1, h5_attn_scalar_tensor)  # strides=(2048, 1), contiguous=True, view=False
+    h5_attn_where = _attn_mask  # reuse precomputed mask
     h5_attn__scaled_dot_product_cudnn_attention = aten._scaled_dot_product_cudnn_attention(h5_attn_transpose, h5_attn_transpose_1, h5_attn_transpose_2, h5_attn_where, True)  # out0: strides=(1048576, 128, 512, 1), contiguous=False; out1: strides=(8192, 2048, 1, 1), contiguous=True; out6: strides=(), contiguous=True; out7: strides=(), contiguous=True, view=False
     h5_attn_getitem_4: 'bfloat16[32, 4, 2048, 128]' = operator.getitem(h5_attn__scaled_dot_product_cudnn_attention, 0)  # strides=(1048576, 128, 512, 1), contiguous=False, view=True
     h5_attn_getitem_5: 'float32[32, 4, 2048, 1]' = operator.getitem(h5_attn__scaled_dot_product_cudnn_attention, 1)  # strides=(8192, 2048, 1, 1), contiguous=True, view=True
@@ -1704,10 +1663,10 @@ def forward(
     # v = self.c_v(x).view(B, T, self.n_kv_head, self.head_dim)
     h6_attn_view_2: 'bfloat16[32, 2048, 4, 128]' = aten.view(h6_attn_c_v__unsafe_view, [32, 2048, 4, 128])  # strides=(1048576, 512, 128, 1), contiguous=True, view=True
     # FUSED: RoPE for Q
-    h6_attn_neg: 'bfloat16[1, 2048, 1, 64]' = aten.neg(getitem_1_slice)
+    h6_attn_neg: 'bfloat16[1, 2048, 1, 64]' = _neg_sin
     h6_attn_cat: 'bfloat16[32, 2048, 4, 128]' = triton_rope_fwd(h6_attn_view, getitem_slice, getitem_1_slice)
     # FUSED: RoPE for K
-    h6_attn_neg_1: 'bfloat16[1, 2048, 1, 64]' = aten.neg(getitem_1_slice)
+    h6_attn_neg_1: 'bfloat16[1, 2048, 1, 64]' = _neg_sin
     h6_attn_cat_1: 'bfloat16[32, 2048, 4, 128]' = triton_rope_fwd(h6_attn_view_1, getitem_slice, getitem_1_slice)
     h6_attn__fused_rms_norm = aten._fused_rms_norm(h6_attn_cat, [128], None, None)  # out0: strides=(1048576, 512, 128, 1), contiguous=True; out1: strides=(8192, 4, 1, 1), contiguous=True, view=False
     h6_attn_getitem: 'bfloat16[32, 2048, 4, 128]' = operator.getitem(h6_attn__fused_rms_norm, 0)  # strides=(1048576, 512, 128, 1), contiguous=True, view=True
@@ -1720,18 +1679,7 @@ def forward(
     h6_attn_transpose: 'bfloat16[32, 4, 2048, 128]' = aten.transpose.int(h6_attn_getitem, 1, 2)  # strides=(1048576, 128, 512, 1), contiguous=False, view=True
     h6_attn_transpose_1: 'bfloat16[32, 4, 2048, 128]' = aten.transpose.int(h6_attn_getitem_2, 1, 2)  # strides=(1048576, 128, 512, 1), contiguous=False, view=True
     h6_attn_transpose_2: 'bfloat16[32, 4, 2048, 128]' = aten.transpose.int(h6_attn_view_2, 1, 2)  # strides=(1048576, 128, 512, 1), contiguous=False, view=True
-    h6_attn_arange: 'int64[2048]' = aten.arange(2048, device=torch.device('cuda:0'), pin_memory=False)  # strides=(1,), contiguous=True, view=False
-    h6_attn_unsqueeze: 'int64[2048, 1]' = aten.unsqueeze(h6_attn_arange, 1)  # strides=(1, 1), contiguous=True, view=True
-    h6_attn_add_4: 'int64[2048, 1]' = aten.add.Tensor(h6_attn_unsqueeze, 0)  # strides=(1, 1), contiguous=True, view=False
-    h6_attn_arange_1: 'int64[2048]' = aten.arange(2048, device=torch.device('cuda:0'), pin_memory=False)  # strides=(1,), contiguous=True, view=False
-    h6_attn_unsqueeze_1: 'int64[1, 2048]' = aten.unsqueeze(h6_attn_arange_1, 0)  # strides=(2048, 1), contiguous=True, view=True
-    h6_attn_le: 'bool[2048, 2048]' = aten.le.Tensor(h6_attn_unsqueeze_1, h6_attn_add_4)  # strides=(2048, 1), contiguous=True, view=False
-    h6_attn_sub: 'int64[2048, 2048]' = aten.sub.Tensor(h6_attn_add_4, h6_attn_unsqueeze_1)  # strides=(2048, 1), contiguous=True, view=False
-    h6_attn_le_1: 'bool[2048, 2048]' = aten.le.Scalar(h6_attn_sub, 1024)  # strides=(2048, 1), contiguous=True, view=False
-    h6_attn_bitwise_and: 'bool[2048, 2048]' = aten.bitwise_and.Tensor(h6_attn_le, h6_attn_le_1)  # strides=(2048, 1), contiguous=True, view=False
-    h6_attn_scalar_tensor: 'bfloat16[]' = aten.scalar_tensor(-65504.0, dtype=torch.bfloat16, device=torch.device('cuda:0'))  # strides=(), contiguous=True, view=False
-    h6_attn_scalar_tensor_1: 'bfloat16[]' = aten.scalar_tensor(0.0, dtype=torch.bfloat16, layout=torch.strided, device=torch.device('cuda:0'))  # strides=(), contiguous=True, view=False
-    h6_attn_where: 'bfloat16[2048, 2048]' = aten.where.self(h6_attn_bitwise_and, h6_attn_scalar_tensor_1, h6_attn_scalar_tensor)  # strides=(2048, 1), contiguous=True, view=False
+    h6_attn_where = _attn_mask  # reuse precomputed mask
     h6_attn__scaled_dot_product_cudnn_attention = aten._scaled_dot_product_cudnn_attention(h6_attn_transpose, h6_attn_transpose_1, h6_attn_transpose_2, h6_attn_where, True)  # out0: strides=(1048576, 128, 512, 1), contiguous=False; out1: strides=(8192, 2048, 1, 1), contiguous=True; out6: strides=(), contiguous=True; out7: strides=(), contiguous=True, view=False
     h6_attn_getitem_4: 'bfloat16[32, 4, 2048, 128]' = operator.getitem(h6_attn__scaled_dot_product_cudnn_attention, 0)  # strides=(1048576, 128, 512, 1), contiguous=False, view=True
     h6_attn_getitem_5: 'float32[32, 4, 2048, 1]' = operator.getitem(h6_attn__scaled_dot_product_cudnn_attention, 1)  # strides=(8192, 2048, 1, 1), contiguous=True, view=True
@@ -1880,10 +1828,10 @@ def forward(
     h7_attn_mul_1: 'bfloat16[32, 2048, 4, 128]' = aten.mul.Tensor(h7_attn_unsqueeze, h7_attn_view_3)  # strides=(1048576, 512, 128, 1), contiguous=True, view=False
     h7_attn_add: 'bfloat16[32, 2048, 4, 128]' = aten.add.Tensor(h7_attn_view_2, h7_attn_mul_1)  # strides=(1048576, 512, 128, 1), contiguous=True, view=False
     # FUSED: RoPE for Q
-    h7_attn_neg: 'bfloat16[1, 2048, 1, 64]' = aten.neg(getitem_1_slice)
+    h7_attn_neg: 'bfloat16[1, 2048, 1, 64]' = _neg_sin
     h7_attn_cat: 'bfloat16[32, 2048, 4, 128]' = triton_rope_fwd(h7_attn_view, getitem_slice, getitem_1_slice)
     # FUSED: RoPE for K
-    h7_attn_neg_1: 'bfloat16[1, 2048, 1, 64]' = aten.neg(getitem_1_slice)
+    h7_attn_neg_1: 'bfloat16[1, 2048, 1, 64]' = _neg_sin
     h7_attn_cat_1: 'bfloat16[32, 2048, 4, 128]' = triton_rope_fwd(h7_attn_view_1, getitem_slice, getitem_1_slice)
     h7_attn__fused_rms_norm = aten._fused_rms_norm(h7_attn_cat, [128], None, None)  # out0: strides=(1048576, 512, 128, 1), contiguous=True; out1: strides=(8192, 4, 1, 1), contiguous=True, view=False
     h7_attn_getitem: 'bfloat16[32, 2048, 4, 128]' = operator.getitem(h7_attn__fused_rms_norm, 0)  # strides=(1048576, 512, 128, 1), contiguous=True, view=True

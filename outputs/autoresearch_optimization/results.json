@@ -1,0 +1,20 @@
+[
+  {
+    "name": "baseline",
+    "median_ms": 75.43873498798348,
+    "final_loss": 9.127225875854492,
+    "description": "Unmodified captured aten graph"
+  },
+  {
+    "name": "squared_relu",
+    "median_ms": 75.4207460267935,
+    "final_loss": 9.127195358276367,
+    "description": "Fuse relu().square() \u2192 single Triton kernel (8 instances)"
+  },
+  {
+    "name": "cuda_vec_add",
+    "median_ms": 75.42509099585004,
+    "final_loss": 9.127202033996582,
+    "description": "Replace bf16 residual adds with vectorized CUDA kernel"
+  }
+]

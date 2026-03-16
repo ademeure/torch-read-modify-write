@@ -375,6 +375,66 @@ def triton_squared_relu_bwd(grad_fp32, relu_fp32, relu_bf16):
     return out
 # ── End Triton fused squared_relu backward kernel ──────────────────
 
+# ── Triton fused RoPE forward kernel ────────────────────────────────
+# Fuses: slice(x, low/high) + mul(cos/sin) + neg + add + cat
+# Input x: [B, T, H, D] where D=128, HALF_D=64
+# cos, sin: [1, T, 1, HALF_D]
+# Output: [B, T, H, D] with rotary embedding applied
+@triton.jit
+def _rope_fwd_kernel(
+    x_ptr, cos_ptr, sin_ptr, out_ptr,
+    B, T, H, HALF_D: tl.constexpr,
+    stride_xb, stride_xt, stride_xh, stride_xd,
+    stride_cb, stride_ct, stride_ch, stride_cd,
+    BLOCK_D: tl.constexpr,
+):
+    # Each program handles one (b, t, h) combination
+    pid = tl.program_id(0)
+    b = pid // (T * H)
+    rem = pid % (T * H)
+    t = rem // H
+    h = rem % H
+
+    # Load cos and sin for this position
+    d_offs = tl.arange(0, BLOCK_D)
+    mask = d_offs < HALF_D
+
+    cos_base = t * stride_ct + d_offs * stride_cd
+    sin_base = t * stride_ct + d_offs * stride_cd
+    cos_val = tl.load(cos_ptr + cos_base, mask=mask)
+    sin_val = tl.load(sin_ptr + sin_base, mask=mask)
+
+    # Load x_low (first HALF_D) and x_high (second HALF_D)
+    x_base = b * stride_xb + t * stride_xt + h * stride_xh
+    x_low = tl.load(x_ptr + x_base + d_offs * stride_xd, mask=mask)
+    x_high = tl.load(x_ptr + x_base + (d_offs + HALF_D) * stride_xd, mask=mask)
+
+    # RoPE: out_low = x_low * cos + x_high * sin
+    #        out_high = x_low * (-sin) + x_high * cos
+    out_low = x_low * cos_val + x_high * sin_val
+    out_high = x_low * (-sin_val) + x_high * cos_val
+
+    tl.store(out_ptr + x_base + d_offs * stride_xd, out_low, mask=mask)
+    tl.store(out_ptr + x_base + (d_offs + HALF_D) * stride_xd, out_high, mask=mask)
+
+def triton_rope_fwd(x, cos, sin):
+    """Fused RoPE forward: replaces slice+mul+neg+mul+add+cat (10 ops → 1 kernel).
+    x: [B, T, H, D], cos/sin: [1, T, 1, HALF_D]
+    """
+    B, T, H, D = x.shape
+    HALF_D = D // 2
+    out = torch.empty_like(x)
+    grid = (B * T * H,)
+    _rope_fwd_kernel[grid](
+        x, cos, sin, out,
+        B, T, H, HALF_D,
+        x.stride(0), x.stride(1), x.stride(2), x.stride(3),
+        cos.stride(0), cos.stride(1), cos.stride(2), cos.stride(3),
+        BLOCK_D=64,  # HALF_D=64 fits in one block
+    )
+    return out
+# ── End Triton fused RoPE forward kernel ───────────────────────────
+
 
 # ======================================================================
 # WEIGHTS / PARAMETERS
@@ -686,26 +746,12 @@ def forward(
     # /.autoresearch_repo/train.py:76
     # v = self.c_v(x).view(B, T, self.n_kv_head, self.head_dim)
     h0_attn_view_2: 'bfloat16[32, 2048, 4, 128]' = aten.view(h0_attn_c_v__unsafe_view, [32, 2048, 4, 128])  # strides=(1048576, 512, 128, 1), contiguous=True, view=True
-    h0_attn_slice: 'bfloat16[32, 2048, 4, 64]' = aten.slice.Tensor(h0_attn_view, 3, 0, 64)  # strides=(1048576, 512, 128, 1), contiguous=False, view=True
-    h0_attn_slice_1: 'bfloat16[32, 2048, 4, 64]' = aten.slice.Tensor(h0_attn_view, 3, 64, 9223372036854775807)  # strides=(1048576, 512, 128, 1), contiguous=False, view=True
-    h0_attn_mul: 'bfloat16[32, 2048, 4, 64]' = aten.mul.Tensor(h0_attn_slice, getitem_slice)  # strides=(524288, 256, 64, 1), contiguous=True, view=False
-    h0_attn_mul_1: 'bfloat16[32, 2048, 4, 64]' = aten.mul.Tensor(h0_attn_slice_1, getitem_1_slice)  # strides=(524288, 256, 64, 1), contiguous=True, view=False
-    h0_attn_add: 'bfloat16[32, 2048, 4, 64]' = aten.add.Tensor(h0_attn_mul, h0_attn_mul_1)  # strides=(524288, 256, 64, 1), contiguous=True, view=False
-    h0_attn_neg: 'bfloat16[1, 2048, 1, 64]' = aten.neg(getitem_1_slice)  # strides=(131072, 64, 64, 1), contiguous=True, view=False
-    h0_attn_mul_2: 'bfloat16[32, 2048, 4, 64]' = aten.mul.Tensor(h0_attn_slice, h0_attn_neg)  # strides=(524288, 256, 64, 1), contiguous=True, view=False
-    h0_attn_mul_3: 'bfloat16[32, 2048, 4, 64]' = aten.mul.Tensor(h0_attn_slice_1, getitem_slice)  # strides=(524288, 256, 64, 1), contiguous=True, view=False
-    h0_attn_add_1: 'bfloat16[32, 2048, 4, 64]' = aten.add.Tensor(h0_attn_mul_2, h0_attn_mul_3)  # strides=(524288, 256, 64, 1), contiguous=True, view=False
-    h0_attn_cat: 'bfloat16[32, 2048, 4, 128]' = aten.cat([h0_attn_add, h0_attn_add_1], 3)  # strides=(1048576, 512, 128, 1), contiguous=True, view=False
-    h0_attn_slice_2: 'bfloat16[32, 2048, 4, 64]' = aten.slice.Tensor(h0_attn_view_1, 3, 0, 64)  # strides=(1048576, 512, 128, 1), contiguous=False, view=True
-    h0_attn_slice_3: 'bfloat16[32, 2048, 4, 64]' = aten.slice.Tensor(h0_attn_view_1, 3, 64, 9223372036854775807)  # strides=(1048576, 512, 128, 1), contiguous=False, view=True
-    h0_attn_mul_4: 'bfloat16[32, 2048, 4, 64]' = aten.mul.Tensor(h0_attn_slice_2, getitem_slice)  # strides=(524288, 256, 64, 1), contiguous=True, view=False
-    h0_attn_mul_5: 'bfloat16[32, 2048, 4, 64]' = aten.mul.Tensor(h0_attn_slice_3, getitem_1_slice)  # strides=(524288, 256, 64, 1), contiguous=True, view=False
-    h0_attn_add_2: 'bfloat16[32, 2048, 4, 64]' = aten.add.Tensor(h0_attn_mul_4, h0_attn_mul_5)  # strides=(524288, 256, 64, 1), contiguous=True, view=False
-    h0_attn_neg_1: 'bfloat16[1, 2048, 1, 64]' = aten.neg(getitem_1_slice)  # strides=(131072, 64, 64, 1), contiguous=True, view=False
-    h0_attn_mul_6: 'bfloat16[32, 2048, 4, 64]' = aten.mul.Tensor(h0_attn_slice_2, h0_attn_neg_1)  # strides=(524288, 256, 64, 1), contiguous=True, view=False
-    h0_attn_mul_7: 'bfloat16[32, 2048, 4, 64]' = aten.mul.Tensor(h0_attn_slice_3, getitem_slice)  # strides=(524288, 256, 64, 1), contiguous=True, view=False
-    h0_attn_add_3: 'bfloat16[32, 2048, 4, 64]' = aten.add.Tensor(h0_attn_mul_6, h0_attn_mul_7)  # strides=(524288, 256, 64, 1), contiguous=True, view=False
-    h0_attn_cat_1: 'bfloat16[32, 2048, 4, 128]' = aten.cat([h0_attn_add_2, h0_attn_add_3], 3)  # strides=(1048576, 512, 128, 1), contiguous=True, view=False
+    # FUSED: RoPE for Q (slice+mul+neg+mul+add+cat → single Triton kernel)
+    h0_attn_neg: 'bfloat16[1, 2048, 1, 64]' = aten.neg(getitem_1_slice)  # saved for backward
+    h0_attn_cat: 'bfloat16[32, 2048, 4, 128]' = triton_rope_fwd(h0_attn_view, getitem_slice, getitem_1_slice)
+    # FUSED: RoPE for K
+    h0_attn_neg_1: 'bfloat16[1, 2048, 1, 64]' = aten.neg(getitem_1_slice)  # saved for backward
+    h0_attn_cat_1: 'bfloat16[32, 2048, 4, 128]' = triton_rope_fwd(h0_attn_view_1, getitem_slice, getitem_1_slice)
     h0_attn__fused_rms_norm = aten._fused_rms_norm(h0_attn_cat, [128], None, None)  # out0: strides=(1048576, 512, 128, 1), contiguous=True; out1: strides=(8192, 4, 1, 1), contiguous=True, view=False
     h0_attn_getitem: 'bfloat16[32, 2048, 4, 128]' = operator.getitem(h0_attn__fused_rms_norm, 0)  # strides=(1048576, 512, 128, 1), contiguous=True, view=True
     h0_attn_getitem_1: 'float32[32, 2048, 4, 1]' = operator.getitem(h0_attn__fused_rms_norm, 1)  # strides=(8192, 4, 1, 1), contiguous=True, view=True
@@ -876,26 +922,12 @@ def forward(
     h1_attn_unsqueeze: 'bfloat16[32, 2048, 4, 1]' = aten.unsqueeze(h1_attn_mul, -1)  # strides=(8192, 4, 1, 1), contiguous=True, view=True
     h1_attn_mul_1: 'bfloat16[32, 2048, 4, 128]' = aten.mul.Tensor(h1_attn_unsqueeze, h1_attn_view_3)  # strides=(1048576, 512, 128, 1), contiguous=True, view=False
     h1_attn_add: 'bfloat16[32, 2048, 4, 128]' = aten.add.Tensor(h1_attn_view_2, h1_attn_mul_1)  # strides=(1048576, 512, 128, 1), contiguous=True, view=False
-    h1_attn_slice_1: 'bfloat16[32, 2048, 4, 64]' = aten.slice.Tensor(h1_attn_view, 3, 0, 64)  # strides=(1048576, 512, 128, 1), contiguous=False, view=True
-    h1_attn_slice_2: 'bfloat16[32, 2048, 4, 64]' = aten.slice.Tensor(h1_attn_view, 3, 64, 9223372036854775807)  # strides=(1048576, 512, 128, 1), contiguous=False, view=True
-    h1_attn_mul_2: 'bfloat16[32, 2048, 4, 64]' = aten.mul.Tensor(h1_attn_slice_1, getitem_slice)  # strides=(524288, 256, 64, 1), contiguous=True, view=False
-    h1_attn_mul_3: 'bfloat16[32, 2048, 4, 64]' = aten.mul.Tensor(h1_attn_slice_2, getitem_1_slice)  # strides=(524288, 256, 64, 1), contiguous=True, view=False
-    h1_attn_add_1: 'bfloat16[32, 2048, 4, 64]' = aten.add.Tensor(h1_attn_mul_2, h1_attn_mul_3)  # strides=(524288, 256, 64, 1), contiguous=True, view=False
-    h1_attn_neg: 'bfloat16[1, 2048, 1, 64]' = aten.neg(getitem_1_slice)  # strides=(131072, 64, 64, 1), contiguous=True, view=False
-    h1_attn_mul_4: 'bfloat16[32, 2048, 4, 64]' = aten.mul.Tensor(h1_attn_slice_1, h1_attn_neg)  # strides=(524288, 256, 64, 1), contiguous=True, view=False
-    h1_attn_mul_5: 'bfloat16[32, 2048, 4, 64]' = aten.mul.Tensor(h1_attn_slice_2, getitem_slice)  # strides=(524288, 256, 64, 1), contiguous=True, view=False
-    h1_attn_add_2: 'bfloat16[32, 2048, 4, 64]' = aten.add.Tensor(h1_attn_mul_4, h1_attn_mul_5)  # strides=(524288, 256, 64, 1), contiguous=True, view=False
-    h1_attn_cat: 'bfloat16[32, 2048, 4, 128]' = aten.cat([h1_attn_add_1, h1_attn_add_2], 3)  # strides=(1048576, 512, 128, 1), contiguous=True, view=False
-    h1_attn_slice_3: 'bfloat16[32, 2048, 4, 64]' = aten.slice.Tensor(h1_attn_view_1, 3, 0, 64)  # strides=(1048576, 512, 128, 1), contiguous=False, view=True
-    h1_attn_slice_4: 'bfloat16[32, 2048, 4, 64]' = aten.slice.Tensor(h1_attn_view_1, 3, 64, 9223372036854775807)  # strides=(1048576, 512, 128, 1), contiguous=False, view=True
-    h1_attn_mul_6: 'bfloat16[32, 2048, 4, 64]' = aten.mul.Tensor(h1_attn_slice_3, getitem_slice)  # strides=(524288, 256, 64, 1), contiguous=True, view=False
-    h1_attn_mul_7: 'bfloat16[32, 2048, 4, 64]' = aten.mul.Tensor(h1_attn_slice_4, getitem_1_slice)  # strides=(524288, 256, 64, 1), contiguous=True, view=False
-    h1_attn_add_3: 'bfloat16[32, 2048, 4, 64]' = aten.add.Tensor(h1_attn_mul_6, h1_attn_mul_7)  # strides=(524288, 256, 64, 1), contiguous=True, view=False
-    h1_attn_neg_1: 'bfloat16[1, 2048, 1, 64]' = aten.neg(getitem_1_slice)  # strides=(131072, 64, 64, 1), contiguous=True, view=False
-    h1_attn_mul_8: 'bfloat16[32, 2048, 4, 64]' = aten.mul.Tensor(h1_attn_slice_3, h1_attn_neg_1)  # strides=(524288, 256, 64, 1), contiguous=True, view=False
-    h1_attn_mul_9: 'bfloat16[32, 2048, 4, 64]' = aten.mul.Tensor(h1_attn_slice_4, getitem_slice)  # strides=(524288, 256, 64, 1), contiguous=True, view=False
-    h1_attn_add_4: 'bfloat16[32, 2048, 4, 64]' = aten.add.Tensor(h1_attn_mul_8, h1_attn_mul_9)  # strides=(524288, 256, 64, 1), contiguous=True, view=False
-    h1_attn_cat_1: 'bfloat16[32, 2048, 4, 128]' = aten.cat([h1_attn_add_3, h1_attn_add_4], 3)  # strides=(1048576, 512, 128, 1), contiguous=True, view=False
+    # FUSED: RoPE for Q
+    h1_attn_neg: 'bfloat16[1, 2048, 1, 64]' = aten.neg(getitem_1_slice)
+    h1_attn_cat: 'bfloat16[32, 2048, 4, 128]' = triton_rope_fwd(h1_attn_view, getitem_slice, getitem_1_slice)
+    # FUSED: RoPE for K
+    h1_attn_neg_1: 'bfloat16[1, 2048, 1, 64]' = aten.neg(getitem_1_slice)
+    h1_attn_cat_1: 'bfloat16[32, 2048, 4, 128]' = triton_rope_fwd(h1_attn_view_1, getitem_slice, getitem_1_slice)
     h1_attn__fused_rms_norm = aten._fused_rms_norm(h1_attn_cat, [128], None, None)  # out0: strides=(1048576, 512, 128, 1), contiguous=True; out1: strides=(8192, 4, 1, 1), contiguous=True, view=False
     h1_attn_getitem: 'bfloat16[32, 2048, 4, 128]' = operator.getitem(h1_attn__fused_rms_norm, 0)  # strides=(1048576, 512, 128, 1), contiguous=True, view=True
     h1_attn_getitem_1: 'float32[32, 2048, 4, 1]' = operator.getitem(h1_attn__fused_rms_norm, 1)  # strides=(8192, 4, 1, 1), contiguous=True, view=True
@@ -1037,26 +1069,12 @@ def forward(
     # /.autoresearch_repo/train.py:76
     # v = self.c_v(x).view(B, T, self.n_kv_head, self.head_dim)
     h2_attn_view_2: 'bfloat16[32, 2048, 4, 128]' = aten.view(h2_attn_c_v__unsafe_view, [32, 2048, 4, 128])  # strides=(1048576, 512, 128, 1), contiguous=True, view=True
-    h2_attn_slice: 'bfloat16[32, 2048, 4, 64]' = aten.slice.Tensor(h2_attn_view, 3, 0, 64)  # strides=(1048576, 512, 128, 1), contiguous=False, view=True
-    h2_attn_slice_1: 'bfloat16[32, 2048, 4, 64]' = aten.slice.Tensor(h2_attn_view, 3, 64, 9223372036854775807)  # strides=(1048576, 512, 128, 1), contiguous=False, view=True
-    h2_attn_mul: 'bfloat16[32, 2048, 4, 64]' = aten.mul.Tensor(h2_attn_slice, getitem_slice)  # strides=(524288, 256, 64, 1), contiguous=True, view=False
-    h2_attn_mul_1: 'bfloat16[32, 2048, 4, 64]' = aten.mul.Tensor(h2_attn_slice_1, getitem_1_slice)  # strides=(524288, 256, 64, 1), contiguous=True, view=False
-    h2_attn_add: 'bfloat16[32, 2048, 4, 64]' = aten.add.Tensor(h2_attn_mul, h2_attn_mul_1)  # strides=(524288, 256, 64, 1), contiguous=True, view=False
-    h2_attn_neg: 'bfloat16[1, 2048, 1, 64]' = aten.neg(getitem_1_slice)  # strides=(131072, 64, 64, 1), contiguous=True, view=False
-    h2_attn_mul_2: 'bfloat16[32, 2048, 4, 64]' = aten.mul.Tensor(h2_attn_slice, h2_attn_neg)  # strides=(524288, 256, 64, 1), contiguous=True, view=False
-    h2_attn_mul_3: 'bfloat16[32, 2048, 4, 64]' = aten.mul.Tensor(h2_attn_slice_1, getitem_slice)  # strides=(524288, 256, 64, 1), contiguous=True, view=False
-    h2_attn_add_1: 'bfloat16[32, 2048, 4, 64]' = aten.add.Tensor(h2_attn_mul_2, h2_attn_mul_3)  # strides=(524288, 256, 64, 1), contiguous=True, view=False
-    h2_attn_cat: 'bfloat16[32, 2048, 4, 128]' = aten.cat([h2_attn_add, h2_attn_add_1], 3)  # strides=(1048576, 512, 128, 1), contiguous=True, view=False
-    h2_attn_slice_2: 'bfloat16[32, 2048, 4, 64]' = aten.slice.Tensor(h2_attn_view_1, 3, 0, 64)  # strides=(1048576, 512, 128, 1), contiguous=False, view=True
-    h2_attn_slice_3: 'bfloat16[32, 2048, 4, 64]' = aten.slice.Tensor(h2_attn_view_1, 3, 64, 9223372036854775807)  # strides=(1048576, 512, 128, 1), contiguous=False, view=True
-    h2_attn_mul_4: 'bfloat16[32, 2048, 4, 64]' = aten.mul.Tensor(h2_attn_slice_2, getitem_slice)  # strides=(524288, 256, 64, 1), contiguous=True, view=False
-    h2_attn_mul_5: 'bfloat16[32, 2048, 4, 64]' = aten.mul.Tensor(h2_attn_slice_3, getitem_1_slice)  # strides=(524288, 256, 64, 1), contiguous=True, view=False
-    h2_attn_add_2: 'bfloat16[32, 2048, 4, 64]' = aten.add.Tensor(h2_attn_mul_4, h2_attn_mul_5)  # strides=(524288, 256, 64, 1), contiguous=True, view=False
-    h2_attn_neg_1: 'bfloat16[1, 2048, 1, 64]' = aten.neg(getitem_1_slice)  # strides=(131072, 64, 64, 1), contiguous=True, view=False
-    h2_attn_mul_6: 'bfloat16[32, 2048, 4, 64]' = aten.mul.Tensor(h2_attn_slice_2, h2_attn_neg_1)  # strides=(524288, 256, 64, 1), contiguous=True, view=False
-    h2_attn_mul_7: 'bfloat16[32, 2048, 4, 64]' = aten.mul.Tensor(h2_attn_slice_3, getitem_slice)  # strides=(524288, 256, 64, 1), contiguous=True, view=False
-    h2_attn_add_3: 'bfloat16[32, 2048, 4, 64]' = aten.add.Tensor(h2_attn_mul_6, h2_attn_mul_7)  # strides=(524288, 256, 64, 1), contiguous=True, view=False
-    h2_attn_cat_1: 'bfloat16[32, 2048, 4, 128]' = aten.cat([h2_attn_add_2, h2_attn_add_3], 3)  # strides=(1048576, 512, 128, 1), contiguous=True, view=False
+    # FUSED: RoPE for Q
+    h2_attn_neg: 'bfloat16[1, 2048, 1, 64]' = aten.neg(getitem_1_slice)
+    h2_attn_cat: 'bfloat16[32, 2048, 4, 128]' = triton_rope_fwd(h2_attn_view, getitem_slice, getitem_1_slice)
+    # FUSED: RoPE for K
+    h2_attn_neg_1: 'bfloat16[1, 2048, 1, 64]' = aten.neg(getitem_1_slice)
+    h2_attn_cat_1: 'bfloat16[32, 2048, 4, 128]' = triton_rope_fwd(h2_attn_view_1, getitem_slice, getitem_1_slice)
     h2_attn__fused_rms_norm = aten._fused_rms_norm(h2_attn_cat, [128], None, None)  # out0: strides=(1048576, 512, 128, 1), contiguous=True; out1: strides=(8192, 4, 1, 1), contiguous=True, view=False
     h2_attn_getitem: 'bfloat16[32, 2048, 4, 128]' = operator.getitem(h2_attn__fused_rms_norm, 0)  # strides=(1048576, 512, 128, 1), contiguous=True, view=True
     h2_attn_getitem_1: 'float32[32, 2048, 4, 1]' = operator.getitem(h2_attn__fused_rms_norm, 1)  # strides=(8192, 4, 1, 1), contiguous=True, view=True
@@ -1227,26 +1245,12 @@ def forward(
     h3_attn_unsqueeze: 'bfloat16[32, 2048, 4, 1]' = aten.unsqueeze(h3_attn_mul, -1)  # strides=(8192, 4, 1, 1), contiguous=True, view=True
     h3_attn_mul_1: 'bfloat16[32, 2048, 4, 128]' = aten.mul.Tensor(h3_attn_unsqueeze, h3_attn_view_3)  # strides=(1048576, 512, 128, 1), contiguous=True, view=False
     h3_attn_add: 'bfloat16[32, 2048, 4, 128]' = aten.add.Tensor(h3_attn_view_2, h3_attn_mul_1)  # strides=(1048576, 512, 128, 1), contiguous=True, view=False
-    h3_attn_slice_1: 'bfloat16[32, 2048, 4, 64]' = aten.slice.Tensor(h3_attn_view, 3, 0, 64)  # strides=(1048576, 512, 128, 1), contiguous=False, view=True
-    h3_attn_slice_2: 'bfloat16[32, 2048, 4, 64]' = aten.slice.Tensor(h3_attn_view, 3, 64, 9223372036854775807)  # strides=(1048576, 512, 128, 1), contiguous=False, view=True
-    h3_attn_mul_2: 'bfloat16[32, 2048, 4, 64]' = aten.mul.Tensor(h3_attn_slice_1, getitem_slice)  # strides=(524288, 256, 64, 1), contiguous=True, view=False
-    h3_attn_mul_3: 'bfloat16[32, 2048, 4, 64]' = aten.mul.Tensor(h3_attn_slice_2, getitem_1_slice)  # strides=(524288, 256, 64, 1), contiguous=True, view=False
-    h3_attn_add_1: 'bfloat16[32, 2048, 4, 64]' = aten.add.Tensor(h3_attn_mul_2, h3_attn_mul_3)  # strides=(524288, 256, 64, 1), contiguous=True, view=False
-    h3_attn_neg: 'bfloat16[1, 2048, 1, 64]' = aten.neg(getitem_1_slice)  # strides=(131072, 64, 64, 1), contiguous=True, view=False
-    h3_attn_mul_4: 'bfloat16[32, 2048, 4, 64]' = aten.mul.Tensor(h3_attn_slice_1, h3_attn_neg)  # strides=(524288, 256, 64, 1), contiguous=True, view=False
-    h3_attn_mul_5: 'bfloat16[32, 2048, 4, 64]' = aten.mul.Tensor(h3_attn_slice_2, getitem_slice)  # strides=(524288, 256, 64, 1), contiguous=True, view=False
-    h3_attn_add_2: 'bfloat16[32, 2048, 4, 64]' = aten.add.Tensor(h3_attn_mul_4, h3_attn_mul_5)  # strides=(524288, 256, 64, 1), contiguous=True, view=False
-    h3_attn_cat: 'bfloat16[32, 2048, 4, 128]' = aten.cat([h3_attn_add_1, h3_attn_add_2], 3)  # strides=(1048576, 512, 128, 1), contiguous=True, view=False
-    h3_attn_slice_3: 'bfloat16[32, 2048, 4, 64]' = aten.slice.Tensor(h3_attn_view_1, 3, 0, 64)  # strides=(1048576, 512, 128, 1), contiguous=False, view=True
-    h3_attn_slice_4: 'bfloat16[32, 2048, 4, 64]' = aten.slice.Tensor(h3_attn_view_1, 3, 64, 9223372036854775807)  # strides=(1048576, 512, 128, 1), contiguous=False, view=True
-    h3_attn_mul_6: 'bfloat16[32, 2048, 4, 64]' = aten.mul.Tensor(h3_attn_slice_3, getitem_slice)  # strides=(524288, 256, 64, 1), contiguous=True, view=False
-    h3_attn_mul_7: 'bfloat16[32, 2048, 4, 64]' = aten.mul.Tensor(h3_attn_slice_4, getitem_1_slice)  # strides=(524288, 256, 64, 1), contiguous=True, view=False
-    h3_attn_add_3: 'bfloat16[32, 2048, 4, 64]' = aten.add.Tensor(h3_attn_mul_6, h3_attn_mul_7)  # strides=(524288, 256, 64, 1), contiguous=True, view=False
-    h3_attn_neg_1: 'bfloat16[1, 2048, 1, 64]' = aten.neg(getitem_1_slice)  # strides=(131072, 64, 64, 1), contiguous=True, view=False
-    h3_attn_mul_8: 'bfloat16[32, 2048, 4, 64]' = aten.mul.Tensor(h3_attn_slice_3, h3_attn_neg_1)  # strides=(524288, 256, 64, 1), contiguous=True, view=False
-    h3_attn_mul_9: 'bfloat16[32, 2048, 4, 64]' = aten.mul.Tensor(h3_attn_slice_4, getitem_slice)  # strides=(524288, 256, 64, 1), contiguous=True, view=False
-    h3_attn_add_4: 'bfloat16[32, 2048, 4, 64]' = aten.add.Tensor(h3_attn_mul_8, h3_attn_mul_9)  # strides=(524288, 256, 64, 1), contiguous=True, view=False
-    h3_attn_cat_1: 'bfloat16[32, 2048, 4, 128]' = aten.cat([h3_attn_add_3, h3_attn_add_4], 3)  # strides=(1048576, 512, 128, 1), contiguous=True, view=False
+    # FUSED: RoPE for Q
+    h3_attn_neg: 'bfloat16[1, 2048, 1, 64]' = aten.neg(getitem_1_slice)
+    h3_attn_cat: 'bfloat16[32, 2048, 4, 128]' = triton_rope_fwd(h3_attn_view, getitem_slice, getitem_1_slice)
+    # FUSED: RoPE for K
+    h3_attn_neg_1: 'bfloat16[1, 2048, 1, 64]' = aten.neg(getitem_1_slice)
+    h3_attn_cat_1: 'bfloat16[32, 2048, 4, 128]' = triton_rope_fwd(h3_attn_view_1, getitem_slice, getitem_1_slice)
     h3_attn__fused_rms_norm = aten._fused_rms_norm(h3_attn_cat, [128], None, None)  # out0: strides=(1048576, 512, 128, 1), contiguous=True; out1: strides=(8192, 4, 1, 1), contiguous=True, view=False
     h3_attn_getitem: 'bfloat16[32, 2048, 4, 128]' = operator.getitem(h3_attn__fused_rms_norm, 0)  # strides=(1048576, 512, 128, 1), contiguous=True, view=True
     h3_attn_getitem_1: 'float32[32, 2048, 4, 1]' = operator.getitem(h3_attn__fused_rms_norm, 1)  # strides=(8192, 4, 1, 1), contiguous=True, view=True
@@ -1376,26 +1380,12 @@ def forward(
     # /.autoresearch_repo/train.py:76
     # v = self.c_v(x).view(B, T, self.n_kv_head, self.head_dim)
     h4_attn_view_2: 'bfloat16[32, 2048, 4, 128]' = aten.view(h4_attn_c_v__unsafe_view, [32, 2048, 4, 128])  # strides=(1048576, 512, 128, 1), contiguous=True, view=True
-    h4_attn_slice: 'bfloat16[32, 2048, 4, 64]' = aten.slice.Tensor(h4_attn_view, 3, 0, 64)  # strides=(1048576, 512, 128, 1), contiguous=False, view=True
-    h4_attn_slice_1: 'bfloat16[32, 2048, 4, 64]' = aten.slice.Tensor(h4_attn_view, 3, 64, 9223372036854775807)  # strides=(1048576, 512, 128, 1), contiguous=False, view=True
-    h4_attn_mul: 'bfloat16[32, 2048, 4, 64]' = aten.mul.Tensor(h4_attn_slice, getitem_slice)  # strides=(524288, 256, 64, 1), contiguous=True, view=False
-    h4_attn_mul_1: 'bfloat16[32, 2048, 4, 64]' = aten.mul.Tensor(h4_attn_slice_1, getitem_1_slice)  # strides=(524288, 256, 64, 1), contiguous=True, view=False
-    h4_attn_add: 'bfloat16[32, 2048, 4, 64]' = aten.add.Tensor(h4_attn_mul, h4_attn_mul_1)  # strides=(524288, 256, 64, 1), contiguous=True, view=False
-    h4_attn_neg: 'bfloat16[1, 2048, 1, 64]' = aten.neg(getitem_1_slice)  # strides=(131072, 64, 64, 1), contiguous=True, view=False
-    h4_attn_mul_2: 'bfloat16[32, 2048, 4, 64]' = aten.mul.Tensor(h4_attn_slice, h4_attn_neg)  # strides=(524288, 256, 64, 1), contiguous=True, view=False
-    h4_attn_mul_3: 'bfloat16[32, 2048, 4, 64]' = aten.mul.Tensor(h4_attn_slice_1, getitem_slice)  # strides=(524288, 256, 64, 1), contiguous=True, view=False
-    h4_attn_add_1: 'bfloat16[32, 2048, 4, 64]' = aten.add.Tensor(h4_attn_mul_2, h4_attn_mul_3)  # strides=(524288, 256, 64, 1), contiguous=True, view=False
-    h4_attn_cat: 'bfloat16[32, 2048, 4, 128]' = aten.cat([h4_attn_add, h4_attn_add_1], 3)  # strides=(1048576, 512, 128, 1), contiguous=True, view=False
-    h4_attn_slice_2: 'bfloat16[32, 2048, 4, 64]' = aten.slice.Tensor(h4_attn_view_1, 3, 0, 64)  # strides=(1048576, 512, 128, 1), contiguous=False, view=True
-    h4_attn_slice_3: 'bfloat16[32, 2048, 4, 64]' = aten.slice.Tensor(h4_attn_view_1, 3, 64, 9223372036854775807)  # strides=(1048576, 512, 128, 1), contiguous=False, view=True
-    h4_attn_mul_4: 'bfloat16[32, 2048, 4, 64]' = aten.mul.Tensor(h4_attn_slice_2, getitem_slice)  # strides=(524288, 256, 64, 1), contiguous=True, view=False
-    h4_attn_mul_5: 'bfloat16[32, 2048, 4, 64]' = aten.mul.Tensor(h4_attn_slice_3, getitem_1_slice)  # strides=(524288, 256, 64, 1), contiguous=True, view=False
-    h4_attn_add_2: 'bfloat16[32, 2048, 4, 64]' = aten.add.Tensor(h4_attn_mul_4, h4_attn_mul_5)  # strides=(524288, 256, 64, 1), contiguous=True, view=False
-    h4_attn_neg_1: 'bfloat16[1, 2048, 1, 64]' = aten.neg(getitem_1_slice)  # strides=(131072, 64, 64, 1), contiguous=True, view=False
-    h4_attn_mul_6: 'bfloat16[32, 2048, 4, 64]' = aten.mul.Tensor(h4_attn_slice_2, h4_attn_neg_1)  # strides=(524288, 256, 64, 1), contiguous=True, view=False
-    h4_attn_mul_7: 'bfloat16[32, 2048, 4, 64]' = aten.mul.Tensor(h4_attn_slice_3, getitem_slice)  # strides=(524288, 256, 64, 1), contiguous=True, view=False
-    h4_attn_add_3: 'bfloat16[32, 2048, 4, 64]' = aten.add.Tensor(h4_attn_mul_6, h4_attn_mul_7)  # strides=(524288, 256, 64, 1), contiguous=True, view=False
-    h4_attn_cat_1: 'bfloat16[32, 2048, 4, 128]' = aten.cat([h4_attn_add_2, h4_attn_add_3], 3)  # strides=(1048576, 512, 128, 1), contiguous=True, view=False
+    # FUSED: RoPE for Q
+    h4_attn_neg: 'bfloat16[1, 2048, 1, 64]' = aten.neg(getitem_1_slice)
+    h4_attn_cat: 'bfloat16[32, 2048, 4, 128]' = triton_rope_fwd(h4_attn_view, getitem_slice, getitem_1_slice)
+    # FUSED: RoPE for K
+    h4_attn_neg_1: 'bfloat16[1, 2048, 1, 64]' = aten.neg(getitem_1_slice)
+    h4_attn_cat_1: 'bfloat16[32, 2048, 4, 128]' = triton_rope_fwd(h4_attn_view_1, getitem_slice, getitem_1_slice)
     h4_attn__fused_rms_norm = aten._fused_rms_norm(h4_attn_cat, [128], None, None)  # out0: strides=(1048576, 512, 128, 1), contiguous=True; out1: strides=(8192, 4, 1, 1), contiguous=True, view=False
     h4_attn_getitem: 'bfloat16[32, 2048, 4, 128]' = operator.getitem(h4_attn__fused_rms_norm, 0)  # strides=(1048576, 512, 128, 1), contiguous=True, view=True
     h4_attn_getitem_1: 'float32[32, 2048, 4, 1]' = operator.getitem(h4_attn__fused_rms_norm, 1)  # strides=(8192, 4, 1, 1), contiguous=True, view=True
@@ -1566,26 +1556,12 @@ def forward(
     h5_attn_unsqueeze: 'bfloat16[32, 2048, 4, 1]' = aten.unsqueeze(h5_attn_mul, -1)  # strides=(8192, 4, 1, 1), contiguous=True, view=True
     h5_attn_mul_1: 'bfloat16[32, 2048, 4, 128]' = aten.mul.Tensor(h5_attn_unsqueeze, h5_attn_view_3)  # strides=(1048576, 512, 128, 1), contiguous=True, view=False
     h5_attn_add: 'bfloat16[32, 2048, 4, 128]' = aten.add.Tensor(h5_attn_view_2, h5_attn_mul_1)  # strides=(1048576, 512, 128, 1), contiguous=True, view=False
-    h5_attn_slice_1: 'bfloat16[32, 2048, 4, 64]' = aten.slice.Tensor(h5_attn_view, 3, 0, 64)  # strides=(1048576, 512, 128, 1), contiguous=False, view=True
-    h5_attn_slice_2: 'bfloat16[32, 2048, 4, 64]' = aten.slice.Tensor(h5_attn_view, 3, 64, 9223372036854775807)  # strides=(1048576, 512, 128, 1), contiguous=False, view=True
-    h5_attn_mul_2: 'bfloat16[32, 2048, 4, 64]' = aten.mul.Tensor(h5_attn_slice_1, getitem_slice)  # strides=(524288, 256, 64, 1), contiguous=True, view=False
-    h5_attn_mul_3: 'bfloat16[32, 2048, 4, 64]' = aten.mul.Tensor(h5_attn_slice_2, getitem_1_slice)  # strides=(524288, 256, 64, 1), contiguous=True, view=False
-    h5_attn_add_1: 'bfloat16[32, 2048, 4, 64]' = aten.add.Tensor(h5_attn_mul_2, h5_attn_mul_3)  # strides=(524288, 256, 64, 1), contiguous=True, view=False
-    h5_attn_neg: 'bfloat16[1, 2048, 1, 64]' = aten.neg(getitem_1_slice)  # strides=(131072, 64, 64, 1), contiguous=True, view=False
-    h5_attn_mul_4: 'bfloat16[32, 2048, 4, 64]' = aten.mul.Tensor(h5_attn_slice_1, h5_attn_neg)  # strides=(524288, 256, 64, 1), contiguous=True, view=False
-    h5_attn_mul_5: 'bfloat16[32, 2048, 4, 64]' = aten.mul.Tensor(h5_attn_slice_2, getitem_slice)  # strides=(524288, 256, 64, 1), contiguous=True, view=False
-    h5_attn_add_2: 'bfloat16[32, 2048, 4, 64]' = aten.add.Tensor(h5_attn_mul_4, h5_attn_mul_5)  # strides=(524288, 256, 64, 1), contiguous=True, view=False
-    h5_attn_cat: 'bfloat16[32, 2048, 4, 128]' = aten.cat([h5_attn_add_1, h5_attn_add_2], 3)  # strides=(1048576, 512, 128, 1), contiguous=True, view=False
-    h5_attn_slice_3: 'bfloat16[32, 2048, 4, 64]' = aten.slice.Tensor(h5_attn_view_1, 3, 0, 64)  # strides=(1048576, 512, 128, 1), contiguous=False, view=True
-    h5_attn_slice_4: 'bfloat16[32, 2048, 4, 64]' = aten.slice.Tensor(h5_attn_view_1, 3, 64, 9223372036854775807)  # strides=(1048576, 512, 128, 1), contiguous=False, view=True
-    h5_attn_mul_6: 'bfloat16[32, 2048, 4, 64]' = aten.mul.Tensor(h5_attn_slice_3, getitem_slice)  # strides=(524288, 256, 64, 1), contiguous=True, view=False
-    h5_attn_mul_7: 'bfloat16[32, 2048, 4, 64]' = aten.mul.Tensor(h5_attn_slice_4, getitem_1_slice)  # strides=(524288, 256, 64, 1), contiguous=True, view=False
-    h5_attn_add_3: 'bfloat16[32, 2048, 4, 64]' = aten.add.Tensor(h5_attn_mul_6, h5_attn_mul_7)  # strides=(524288, 256, 64, 1), contiguous=True, view=False
-    h5_attn_neg_1: 'bfloat16[1, 2048, 1, 64]' = aten.neg(getitem_1_slice)  # strides=(131072, 64, 64, 1), contiguous=True, view=False
-    h5_attn_mul_8: 'bfloat16[32, 2048, 4, 64]' = aten.mul.Tensor(h5_attn_slice_3, h5_attn_neg_1)  # strides=(524288, 256, 64, 1), contiguous=True, view=False
-    h5_attn_mul_9: 'bfloat16[32, 2048, 4, 64]' = aten.mul.Tensor(h5_attn_slice_4, getitem_slice)  # strides=(524288, 256, 64, 1), contiguous=True, view=False
-    h5_attn_add_4: 'bfloat16[32, 2048, 4, 64]' = aten.add.Tensor(h5_attn_mul_8, h5_attn_mul_9)  # strides=(524288, 256, 64, 1), contiguous=True, view=False
-    h5_attn_cat_1: 'bfloat16[32, 2048, 4, 128]' = aten.cat([h5_attn_add_3, h5_attn_add_4], 3)  # strides=(1048576, 512, 128, 1), contiguous=True, view=False
+    # FUSED: RoPE for Q
+    h5_attn_neg: 'bfloat16[1, 2048, 1, 64]' = aten.neg(getitem_1_slice)
+    h5_attn_cat: 'bfloat16[32, 2048, 4, 128]' = triton_rope_fwd(h5_attn_view, getitem_slice, getitem_1_slice)
+    # FUSED: RoPE for K
+    h5_attn_neg_1: 'bfloat16[1, 2048, 1, 64]' = aten.neg(getitem_1_slice)
+    h5_attn_cat_1: 'bfloat16[32, 2048, 4, 128]' = triton_rope_fwd(h5_attn_view_1, getitem_slice, getitem_1_slice)
     h5_attn__fused_rms_norm = aten._fused_rms_norm(h5_attn_cat, [128], None, None)  # out0: strides=(1048576, 512, 128, 1), contiguous=True; out1: strides=(8192, 4, 1, 1), contiguous=True, view=False
     h5_attn_getitem: 'bfloat16[32, 2048, 4, 128]' = operator.getitem(h5_attn__fused_rms_norm, 0)  # strides=(1048576, 512, 128, 1), contiguous=True, view=True
     h5_attn_getitem_1: 'float32[32, 2048, 4, 1]' = operator.getitem(h5_attn__fused_rms_norm, 1)  # strides=(8192, 4, 1, 1), contiguous=True, view=True
@@ -1727,26 +1703,12 @@ def forward(
     # /.autoresearch_repo/train.py:76
     # v = self.c_v(x).view(B, T, self.n_kv_head, self.head_dim)
     h6_attn_view_2: 'bfloat16[32, 2048, 4, 128]' = aten.view(h6_attn_c_v__unsafe_view, [32, 2048, 4, 128])  # strides=(1048576, 512, 128, 1), contiguous=True, view=True
-    h6_attn_slice: 'bfloat16[32, 2048, 4, 64]' = aten.slice.Tensor(h6_attn_view, 3, 0, 64)  # strides=(1048576, 512, 128, 1), contiguous=False, view=True
-    h6_attn_slice_1: 'bfloat16[32, 2048, 4, 64]' = aten.slice.Tensor(h6_attn_view, 3, 64, 9223372036854775807)  # strides=(1048576, 512, 128, 1), contiguous=False, view=True
-    h6_attn_mul: 'bfloat16[32, 2048, 4, 64]' = aten.mul.Tensor(h6_attn_slice, getitem_slice)  # strides=(524288, 256, 64, 1), contiguous=True, view=False
-    h6_attn_mul_1: 'bfloat16[32, 2048, 4, 64]' = aten.mul.Tensor(h6_attn_slice_1, getitem_1_slice)  # strides=(524288, 256, 64, 1), contiguous=True, view=False
-    h6_attn_add: 'bfloat16[32, 2048, 4, 64]' = aten.add.Tensor(h6_attn_mul, h6_attn_mul_1)  # strides=(524288, 256, 64, 1), contiguous=True, view=False
-    h6_attn_neg: 'bfloat16[1, 2048, 1, 64]' = aten.neg(getitem_1_slice)  # strides=(131072, 64, 64, 1), contiguous=True, view=False
-    h6_attn_mul_2: 'bfloat16[32, 2048, 4, 64]' = aten.mul.Tensor(h6_attn_slice, h6_attn_neg)  # strides=(524288, 256, 64, 1), contiguous=True, view=False
-    h6_attn_mul_3: 'bfloat16[32, 2048, 4, 64]' = aten.mul.Tensor(h6_attn_slice_1, getitem_slice)  # strides=(524288, 256, 64, 1), contiguous=True, view=False
-    h6_attn_add_1: 'bfloat16[32, 2048, 4, 64]' = aten.add.Tensor(h6_attn_mul_2, h6_attn_mul_3)  # strides=(524288, 256, 64, 1), contiguous=True, view=False
-    h6_attn_cat: 'bfloat16[32, 2048, 4, 128]' = aten.cat([h6_attn_add, h6_attn_add_1], 3)  # strides=(1048576, 512, 128, 1), contiguous=True, view=False
-    h6_attn_slice_2: 'bfloat16[32, 2048, 4, 64]' = aten.slice.Tensor(h6_attn_view_1, 3, 0, 64)  # strides=(1048576, 512, 128, 1), contiguous=False, view=True
-    h6_attn_slice_3: 'bfloat16[32, 2048, 4, 64]' = aten.slice.Tensor(h6_attn_view_1, 3, 64, 9223372036854775807)  # strides=(1048576, 512, 128, 1), contiguous=False, view=True
-    h6_attn_mul_4: 'bfloat16[32, 2048, 4, 64]' = aten.mul.Tensor(h6_attn_slice_2, getitem_slice)  # strides=(524288, 256, 64, 1), contiguous=True, view=False
-    h6_attn_mul_5: 'bfloat16[32, 2048, 4, 64]' = aten.mul.Tensor(h6_attn_slice_3, getitem_1_slice)  # strides=(524288, 256, 64, 1), contiguous=True, view=False
-    h6_attn_add_2: 'bfloat16[32, 2048, 4, 64]' = aten.add.Tensor(h6_attn_mul_4, h6_attn_mul_5)  # strides=(524288, 256, 64, 1), contiguous=True, view=False
-    h6_attn_neg_1: 'bfloat16[1, 2048, 1, 64]' = aten.neg(getitem_1_slice)  # strides=(131072, 64, 64, 1), contiguous=True, view=False
-    h6_attn_mul_6: 'bfloat16[32, 2048, 4, 64]' = aten.mul.Tensor(h6_attn_slice_2, h6_attn_neg_1)  # strides=(524288, 256, 64, 1), contiguous=True, view=False
-    h6_attn_mul_7: 'bfloat16[32, 2048, 4, 64]' = aten.mul.Tensor(h6_attn_slice_3, getitem_slice)  # strides=(524288, 256, 64, 1), contiguous=True, view=False
-    h6_attn_add_3: 'bfloat16[32, 2048, 4, 64]' = aten.add.Tensor(h6_attn_mul_6, h6_attn_mul_7)  # strides=(524288, 256, 64, 1), contiguous=True, view=False
-    h6_attn_cat_1: 'bfloat16[32, 2048, 4, 128]' = aten.cat([h6_attn_add_2, h6_attn_add_3], 3)  # strides=(1048576, 512, 128, 1), contiguous=True, view=False
+    # FUSED: RoPE for Q
+    h6_attn_neg: 'bfloat16[1, 2048, 1, 64]' = aten.neg(getitem_1_slice)
+    h6_attn_cat: 'bfloat16[32, 2048, 4, 128]' = triton_rope_fwd(h6_attn_view, getitem_slice, getitem_1_slice)
+    # FUSED: RoPE for K
+    h6_attn_neg_1: 'bfloat16[1, 2048, 1, 64]' = aten.neg(getitem_1_slice)
+    h6_attn_cat_1: 'bfloat16[32, 2048, 4, 128]' = triton_rope_fwd(h6_attn_view_1, getitem_slice, getitem_1_slice)
     h6_attn__fused_rms_norm = aten._fused_rms_norm(h6_attn_cat, [128], None, None)  # out0: strides=(1048576, 512, 128, 1), contiguous=True; out1: strides=(8192, 4, 1, 1), contiguous=True, view=False
     h6_attn_getitem: 'bfloat16[32, 2048, 4, 128]' = operator.getitem(h6_attn__fused_rms_norm, 0)  # strides=(1048576, 512, 128, 1), contiguous=True, view=True
     h6_attn_getitem_1: 'float32[32, 2048, 4, 1]' = operator.getitem(h6_attn__fused_rms_norm, 1)  # strides=(8192, 4, 1, 1), contiguous=True, view=True
@@ -1917,26 +1879,12 @@ def forward(
     h7_attn_unsqueeze: 'bfloat16[32, 2048, 4, 1]' = aten.unsqueeze(h7_attn_mul, -1)  # strides=(8192, 4, 1, 1), contiguous=True, view=True
     h7_attn_mul_1: 'bfloat16[32, 2048, 4, 128]' = aten.mul.Tensor(h7_attn_unsqueeze, h7_attn_view_3)  # strides=(1048576, 512, 128, 1), contiguous=True, view=False
     h7_attn_add: 'bfloat16[32, 2048, 4, 128]' = aten.add.Tensor(h7_attn_view_2, h7_attn_mul_1)  # strides=(1048576, 512, 128, 1), contiguous=True, view=False
-    h7_attn_slice_1: 'bfloat16[32, 2048, 4, 64]' = aten.slice.Tensor(h7_attn_view, 3, 0, 64)  # strides=(1048576, 512, 128, 1), contiguous=False, view=True
-    h7_attn_slice_2: 'bfloat16[32, 2048, 4, 64]' = aten.slice.Tensor(h7_attn_view, 3, 64, 9223372036854775807)  # strides=(1048576, 512, 128, 1), contiguous=False, view=True
-    h7_attn_mul_2: 'bfloat16[32, 2048, 4, 64]' = aten.mul.Tensor(h7_attn_slice_1, getitem_slice)  # strides=(524288, 256, 64, 1), contiguous=True, view=False
-    h7_attn_mul_3: 'bfloat16[32, 2048, 4, 64]' = aten.mul.Tensor(h7_attn_slice_2, getitem_1_slice)  # strides=(524288, 256, 64, 1), contiguous=True, view=False
-    h7_attn_add_1: 'bfloat16[32, 2048, 4, 64]' = aten.add.Tensor(h7_attn_mul_2, h7_attn_mul_3)  # strides=(524288, 256, 64, 1), contiguous=True, view=False
-    h7_attn_neg: 'bfloat16[1, 2048, 1, 64]' = aten.neg(getitem_1_slice)  # strides=(131072, 64, 64, 1), contiguous=True, view=False
-    h7_attn_mul_4: 'bfloat16[32, 2048, 4, 64]' = aten.mul.Tensor(h7_attn_slice_1, h7_attn_neg)  # strides=(524288, 256, 64, 1), contiguous=True, view=False
-    h7_attn_mul_5: 'bfloat16[32, 2048, 4, 64]' = aten.mul.Tensor(h7_attn_slice_2, getitem_slice)  # strides=(524288, 256, 64, 1), contiguous=True, view=False
-    h7_attn_add_2: 'bfloat16[32, 2048, 4, 64]' = aten.add.Tensor(h7_attn_mul_4, h7_attn_mul_5)  # strides=(524288, 256, 64, 1), contiguous=True, view=False
-    h7_attn_cat: 'bfloat16[32, 2048, 4, 128]' = aten.cat([h7_attn_add_1, h7_attn_add_2], 3)  # strides=(1048576, 512, 128, 1), contiguous=True, view=False
-    h7_attn_slice_3: 'bfloat16[32, 2048, 4, 64]' = aten.slice.Tensor(h7_attn_view_1, 3, 0, 64)  # strides=(1048576, 512, 128, 1), contiguous=False, view=True
-    h7_attn_slice_4: 'bfloat16[32, 2048, 4, 64]' = aten.slice.Tensor(h7_attn_view_1, 3, 64, 9223372036854775807)  # strides=(1048576, 512, 128, 1), contiguous=False, view=True
-    h7_attn_mul_6: 'bfloat16[32, 2048, 4, 64]' = aten.mul.Tensor(h7_attn_slice_3, getitem_slice)  # strides=(524288, 256, 64, 1), contiguous=True, view=False
-    h7_attn_mul_7: 'bfloat16[32, 2048, 4, 64]' = aten.mul.Tensor(h7_attn_slice_4, getitem_1_slice)  # strides=(524288, 256, 64, 1), contiguous=True, view=False
-    h7_attn_add_3: 'bfloat16[32, 2048, 4, 64]' = aten.add.Tensor(h7_attn_mul_6, h7_attn_mul_7)  # strides=(524288, 256, 64, 1), contiguous=True, view=False
-    h7_attn_neg_1: 'bfloat16[1, 2048, 1, 64]' = aten.neg(getitem_1_slice)  # strides=(131072, 64, 64, 1), contiguous=True, view=False
-    h7_attn_mul_8: 'bfloat16[32, 2048, 4, 64]' = aten.mul.Tensor(h7_attn_slice_3, h7_attn_neg_1)  # strides=(524288, 256, 64, 1), contiguous=True, view=False
-    h7_attn_mul_9: 'bfloat16[32, 2048, 4, 64]' = aten.mul.Tensor(h7_attn_slice_4, getitem_slice)  # strides=(524288, 256, 64, 1), contiguous=True, view=False
-    h7_attn_add_4: 'bfloat16[32, 2048, 4, 64]' = aten.add.Tensor(h7_attn_mul_8, h7_attn_mul_9)  # strides=(524288, 256, 64, 1), contiguous=True, view=False
-    h7_attn_cat_1: 'bfloat16[32, 2048, 4, 128]' = aten.cat([h7_attn_add_3, h7_attn_add_4], 3)  # strides=(1048576, 512, 128, 1), contiguous=True, view=False
+    # FUSED: RoPE for Q
+    h7_attn_neg: 'bfloat16[1, 2048, 1, 64]' = aten.neg(getitem_1_slice)
+    h7_attn_cat: 'bfloat16[32, 2048, 4, 128]' = triton_rope_fwd(h7_attn_view, getitem_slice, getitem_1_slice)
+    # FUSED: RoPE for K
+    h7_attn_neg_1: 'bfloat16[1, 2048, 1, 64]' = aten.neg(getitem_1_slice)
+    h7_attn_cat_1: 'bfloat16[32, 2048, 4, 128]' = triton_rope_fwd(h7_attn_view_1, getitem_slice, getitem_1_slice)
     h7_attn__fused_rms_norm = aten._fused_rms_norm(h7_attn_cat, [128], None, None)  # out0: strides=(1048576, 512, 128, 1), contiguous=True; out1: strides=(8192, 4, 1, 1), contiguous=True, view=False
     h7_attn_getitem: 'bfloat16[32, 2048, 4, 128]' = operator.getitem(h7_attn__fused_rms_norm, 0)  # strides=(1048576, 512, 128, 1), contiguous=True, view=True
     h7_attn_getitem_1: 'float32[32, 2048, 4, 1]' = operator.getitem(h7_attn__fused_rms_norm, 1)  # strides=(8192, 4, 1, 1), contiguous=True, view=True

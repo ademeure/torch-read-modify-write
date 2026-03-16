@@ -34,5 +34,11 @@
     "median_ms": 65.297,
     "final_loss": 9.128935,
     "description": "Fuse squared relu backward (pow+mul+mul+to_copy+threshold_bwd \u2192 1 kernel, 8 instances)"
+  },
+  {
+    "name": "rope_fwd",
+    "median_ms": 63.3204,
+    "final_loss": 9.128079,
+    "description": "Fuse forward RoPE (slice+mul+neg+mul+add+cat \u2192 1 Triton kernel, 16 instances)"
   }
 ]

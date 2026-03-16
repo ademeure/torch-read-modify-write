@@ -1,56 +1,50 @@
 [
   {
     "name": "baseline",
-    "median_ms": 75.43873498798348,
-    "final_loss": 9.127225875854492,
+    "median_ms": 75.44,
+    "final_loss": 9.127226,
     "description": "Unmodified captured aten graph"
   },
   {
-    "name": "squared_relu",
-    "median_ms": 75.4207460267935,
-    "final_loss": 9.127195358276367,
-    "description": "Fuse relu().square() \u2192 single Triton kernel (8 instances)"
-  },
-  {
-    "name": "cuda_vec_add",
-    "median_ms": 75.42509099585004,
-    "final_loss": 9.127202033996582,
-    "description": "Replace bf16 residual adds with vectorized CUDA kernel"
-  },
-  {
-    "name": "softcap_fusion",
-    "median_ms": 71.0664,
+    "name": "softcap",
+    "median_ms": 71.07,
     "final_loss": 9.128914,
-    "description": "Fuse softcap fwd+bwd into Triton kernels"
+    "description": "Fuse softcap fwd+bwd Triton kernels"
   },
   {
-    "name": "lambda_scale",
-    "median_ms": 69.8046,
+    "name": "lambda",
+    "median_ms": 69.80,
     "final_loss": 9.129214,
-    "description": "Fuse lambda scaling (a*x + b*x0) Triton kernel (8x)"
+    "description": "Fuse lambda scaling Triton (8x)"
   },
   {
     "name": "sqrelu_bwd",
-    "median_ms": 65.297,
+    "median_ms": 65.30,
     "final_loss": 9.128935,
-    "description": "Fuse squared relu backward Triton kernel (8x)"
+    "description": "Fuse sqrelu backward Triton (8x)"
   },
   {
     "name": "rope_fwd",
-    "median_ms": 63.3204,
+    "median_ms": 63.32,
     "final_loss": 9.128079,
-    "description": "Fuse forward RoPE Triton kernel (16x)"
+    "description": "Fuse RoPE forward Triton (16x)"
   },
   {
-    "name": "dedup_ops",
-    "median_ms": 63.0517,
+    "name": "dedup",
+    "median_ms": 63.05,
     "final_loss": 9.126553,
-    "description": "Deduplicate neg(sin) and attention mask"
+    "description": "Dedup neg(sin)+mask"
   },
   {
     "name": "sqrelu_fwd",
-    "median_ms": 58.8738,
+    "median_ms": 58.87,
     "final_loss": 9.126896,
-    "description": "Fuse squared relu forward (relu+cast+pow+cast \u2192 1 kernel, 8x)"
+    "description": "Fuse sqrelu forward Triton (8x)"
+  },
+  {
+    "name": "elim_cast",
+    "median_ms": 55.80,
+    "final_loss": 9.127618,
+    "description": "Fold bf16\u2192fp32 cast into sqrelu_bwd kernel (8x)"
   }
 ]

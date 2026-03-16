@@ -28,5 +28,11 @@
     "median_ms": 69.8046,
     "final_loss": 9.129214,
     "description": "Fuse lambda scaling (a*x + b*x0) into single Triton kernel (8 instances)"
+  },
+  {
+    "name": "sqrelu_bwd",
+    "median_ms": 65.297,
+    "final_loss": 9.128935,
+    "description": "Fuse squared relu backward (pow+mul+mul+to_copy+threshold_bwd \u2192 1 kernel, 8 instances)"
   }
 ]

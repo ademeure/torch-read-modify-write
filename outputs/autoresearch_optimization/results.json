@@ -16,5 +16,11 @@
     "median_ms": 75.42509099585004,
     "final_loss": 9.127202033996582,
     "description": "Replace bf16 residual adds with vectorized CUDA kernel"
+  },
+  {
+    "name": "softcap_fusion",
+    "median_ms": 71.0664,
+    "final_loss": 9.128914,
+    "description": "Fuse softcap fwd (bf16\u2192fp32+div+tanh+mul) and bwd (mul+tanh_bwd+div+to_bf16) into Triton kernels"
   }
 ]

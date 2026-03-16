@@ -346,6 +346,35 @@ def triton_softcap_bwd(grad_fp32, tanh_out_fp32, softcap=15):
     return out
 # ── End Triton fused softcap backward kernel ────────────────────────
 
+# ── Triton fused squared_relu backward kernel ───────────────────────
+# Fuses: pow(x,1) + mul(2) + mul(grad,result) + _to_copy(bf16) + threshold_backward
+# = grad * 2 * relu_fp32 * (relu > 0) → bf16
+@triton.jit
+def _squared_relu_bwd_kernel(
+    grad_ptr, relu_fp32_ptr, relu_bf16_ptr, out_ptr, n,
+    BLOCK: tl.constexpr,
+):
+    pid = tl.program_id(0)
+    offs = pid * BLOCK + tl.arange(0, BLOCK)
+    mask = offs < n
+    grad = tl.load(grad_ptr + offs, mask=mask)           # fp32
+    relu_fp32 = tl.load(relu_fp32_ptr + offs, mask=mask)  # fp32
+    relu_bf16 = tl.load(relu_bf16_ptr + offs, mask=mask).to(tl.float32)  # bf16 → fp32
+    # d/dx [relu(x)^2] = 2*relu(x) * (x > 0)
+    # threshold_backward: output 0 where relu was 0
+    result = tl.where(relu_bf16 > 0, grad * 2.0 * relu_fp32, 0.0)
+    tl.store(out_ptr + offs, result.to(tl.bfloat16), mask=mask)
+
+def triton_squared_relu_bwd(grad_fp32, relu_fp32, relu_bf16):
+    """Fused squared relu backward: grad * 2 * relu * (relu > 0) → bf16."""
+    n = grad_fp32.numel()
+    out = torch.empty(grad_fp32.shape, dtype=torch.bfloat16, device=grad_fp32.device)
+    BLOCK = 1024
+    grid = ((n + BLOCK - 1) // BLOCK,)
+    _squared_relu_bwd_kernel[grid](grad_fp32, relu_fp32, relu_bf16, out, n, BLOCK=BLOCK)
+    return out
+# ── End Triton fused squared_relu backward kernel ──────────────────
+
 
 # ======================================================================
 # WEIGHTS / PARAMETERS
@@ -2400,12 +2429,8 @@ def backward(
     # grad of self.transformer.h.7.mlp (MLP) → d_loss/d_mlp
     # /.autoresearch_repo/train.py:102
     # x = F.relu(x).square()
-    grad_h7_mlp_pow: 'float32[32, 2048, 2048]' = aten.pow.Tensor_Scalar(_to_copy_65, 1.0)  # strides=(4194304, 2048, 1), contiguous=True, view=False
-    grad_h7_mlp_mul: 'float32[32, 2048, 2048]' = aten.mul.Scalar(grad_h7_mlp_pow, 2.0)  # strides=(4194304, 2048, 1), contiguous=True, view=False
-    grad_h7_mlp_mul_1: 'float32[32, 2048, 2048]' = aten.mul.Tensor(grad_h7_mlp_c_proj__to_copy, grad_h7_mlp_mul)  # strides=(4194304, 2048, 1), contiguous=True, view=False
-    grad_h7_mlp__to_copy: 'bfloat16[32, 2048, 2048]' = aten._to_copy(grad_h7_mlp_mul_1, dtype=torch.bfloat16, layout=torch.strided, device=torch.device('cuda:0'))  # strides=(4194304, 2048, 1), contiguous=True, view=False
-    grad_h7_mlp_detach: 'bfloat16[32, 2048, 2048]' = aten.detach(detach_52)  # strides=(4194304, 2048, 1), contiguous=True, view=True
-    grad_h7_mlp_threshold_backward: 'bfloat16[32, 2048, 2048]' = aten.threshold_backward(grad_h7_mlp__to_copy, grad_h7_mlp_detach, 0)  # strides=(4194304, 2048, 1), contiguous=True, view=False
+    # FUSED: squared_relu backward (pow+mul+mul+to_copy+threshold_backward → single Triton kernel)
+    grad_h7_mlp_threshold_backward: 'bfloat16[32, 2048, 2048]' = triton_squared_relu_bwd(grad_h7_mlp_c_proj__to_copy, _to_copy_65, detach_52)
 
     # grad of self.transformer.h.7.mlp.c_fc (Linear) → d_loss/d_c_fc
     # /.autoresearch_repo/train.py:101
@@ -2612,12 +2637,8 @@ def backward(
     # grad of self.transformer.h.6.mlp (MLP) → d_loss/d_mlp
     # /.autoresearch_repo/train.py:102
     # x = F.relu(x).square()
-    grad_h6_mlp_pow: 'float32[32, 2048, 2048]' = aten.pow.Tensor_Scalar(_to_copy_56, 1.0)  # strides=(4194304, 2048, 1), contiguous=True, view=False
-    grad_h6_mlp_mul: 'float32[32, 2048, 2048]' = aten.mul.Scalar(grad_h6_mlp_pow, 2.0)  # strides=(4194304, 2048, 1), contiguous=True, view=False
-    grad_h6_mlp_mul_1: 'float32[32, 2048, 2048]' = aten.mul.Tensor(grad_h6_mlp_c_proj__to_copy, grad_h6_mlp_mul)  # strides=(4194304, 2048, 1), contiguous=True, view=False
-    grad_h6_mlp__to_copy: 'bfloat16[32, 2048, 2048]' = aten._to_copy(grad_h6_mlp_mul_1, dtype=torch.bfloat16, layout=torch.strided, device=torch.device('cuda:0'))  # strides=(4194304, 2048, 1), contiguous=True, view=False
-    grad_h6_mlp_detach: 'bfloat16[32, 2048, 2048]' = aten.detach(detach_45)  # strides=(4194304, 2048, 1), contiguous=True, view=True
-    grad_h6_mlp_threshold_backward: 'bfloat16[32, 2048, 2048]' = aten.threshold_backward(grad_h6_mlp__to_copy, grad_h6_mlp_detach, 0)  # strides=(4194304, 2048, 1), contiguous=True, view=False
+    # FUSED: squared_relu backward
+    grad_h6_mlp_threshold_backward: 'bfloat16[32, 2048, 2048]' = triton_squared_relu_bwd(grad_h6_mlp_c_proj__to_copy, _to_copy_56, detach_45)
 
     # grad of self.transformer.h.6.mlp.c_fc (Linear) → d_loss/d_c_fc
     # /.autoresearch_repo/train.py:101
@@ -2790,12 +2811,8 @@ def backward(
     # grad of self.transformer.h.5.mlp (MLP) → d_loss/d_mlp
     # /.autoresearch_repo/train.py:102
     # x = F.relu(x).square()
-    grad_h5_mlp_pow: 'float32[32, 2048, 2048]' = aten.pow.Tensor_Scalar(_to_copy_48, 1.0)  # strides=(4194304, 2048, 1), contiguous=True, view=False
-    grad_h5_mlp_mul: 'float32[32, 2048, 2048]' = aten.mul.Scalar(grad_h5_mlp_pow, 2.0)  # strides=(4194304, 2048, 1), contiguous=True, view=False
-    grad_h5_mlp_mul_1: 'float32[32, 2048, 2048]' = aten.mul.Tensor(grad_h5_mlp_c_proj__to_copy, grad_h5_mlp_mul)  # strides=(4194304, 2048, 1), contiguous=True, view=False
-    grad_h5_mlp__to_copy: 'bfloat16[32, 2048, 2048]' = aten._to_copy(grad_h5_mlp_mul_1, dtype=torch.bfloat16, layout=torch.strided, device=torch.device('cuda:0'))  # strides=(4194304, 2048, 1), contiguous=True, view=False
-    grad_h5_mlp_detach: 'bfloat16[32, 2048, 2048]' = aten.detach(detach_39)  # strides=(4194304, 2048, 1), contiguous=True, view=True
-    grad_h5_mlp_threshold_backward: 'bfloat16[32, 2048, 2048]' = aten.threshold_backward(grad_h5_mlp__to_copy, grad_h5_mlp_detach, 0)  # strides=(4194304, 2048, 1), contiguous=True, view=False
+    # FUSED: squared_relu backward
+    grad_h5_mlp_threshold_backward: 'bfloat16[32, 2048, 2048]' = triton_squared_relu_bwd(grad_h5_mlp_c_proj__to_copy, _to_copy_48, detach_39)
 
     # grad of self.transformer.h.5.mlp.c_fc (Linear) → d_loss/d_c_fc
     # /.autoresearch_repo/train.py:101
@@ -3005,12 +3022,8 @@ def backward(
     # grad of self.transformer.h.4.mlp (MLP) → d_loss/d_mlp
     # /.autoresearch_repo/train.py:102
     # x = F.relu(x).square()
-    grad_h4_mlp_pow: 'float32[32, 2048, 2048]' = aten.pow.Tensor_Scalar(_to_copy_39, 1.0)  # strides=(4194304, 2048, 1), contiguous=True, view=False
-    grad_h4_mlp_mul: 'float32[32, 2048, 2048]' = aten.mul.Scalar(grad_h4_mlp_pow, 2.0)  # strides=(4194304, 2048, 1), contiguous=True, view=False
-    grad_h4_mlp_mul_1: 'float32[32, 2048, 2048]' = aten.mul.Tensor(grad_h4_mlp_c_proj__to_copy, grad_h4_mlp_mul)  # strides=(4194304, 2048, 1), contiguous=True, view=False
-    grad_h4_mlp__to_copy: 'bfloat16[32, 2048, 2048]' = aten._to_copy(grad_h4_mlp_mul_1, dtype=torch.bfloat16, layout=torch.strided, device=torch.device('cuda:0'))  # strides=(4194304, 2048, 1), contiguous=True, view=False
-    grad_h4_mlp_detach: 'bfloat16[32, 2048, 2048]' = aten.detach(detach_32)  # strides=(4194304, 2048, 1), contiguous=True, view=True
-    grad_h4_mlp_threshold_backward: 'bfloat16[32, 2048, 2048]' = aten.threshold_backward(grad_h4_mlp__to_copy, grad_h4_mlp_detach, 0)  # strides=(4194304, 2048, 1), contiguous=True, view=False
+    # FUSED: squared_relu backward
+    grad_h4_mlp_threshold_backward: 'bfloat16[32, 2048, 2048]' = triton_squared_relu_bwd(grad_h4_mlp_c_proj__to_copy, _to_copy_39, detach_32)
 
     # grad of self.transformer.h.4.mlp.c_fc (Linear) → d_loss/d_c_fc
     # /.autoresearch_repo/train.py:101
@@ -3183,12 +3196,8 @@ def backward(
     # grad of self.transformer.h.3.mlp (MLP) → d_loss/d_mlp
     # /.autoresearch_repo/train.py:102
     # x = F.relu(x).square()
-    grad_h3_mlp_pow: 'float32[32, 2048, 2048]' = aten.pow.Tensor_Scalar(_to_copy_31, 1.0)  # strides=(4194304, 2048, 1), contiguous=True, view=False
-    grad_h3_mlp_mul: 'float32[32, 2048, 2048]' = aten.mul.Scalar(grad_h3_mlp_pow, 2.0)  # strides=(4194304, 2048, 1), contiguous=True, view=False
-    grad_h3_mlp_mul_1: 'float32[32, 2048, 2048]' = aten.mul.Tensor(grad_h3_mlp_c_proj__to_copy, grad_h3_mlp_mul)  # strides=(4194304, 2048, 1), contiguous=True, view=False
-    grad_h3_mlp__to_copy: 'bfloat16[32, 2048, 2048]' = aten._to_copy(grad_h3_mlp_mul_1, dtype=torch.bfloat16, layout=torch.strided, device=torch.device('cuda:0'))  # strides=(4194304, 2048, 1), contiguous=True, view=False
-    grad_h3_mlp_detach: 'bfloat16[32, 2048, 2048]' = aten.detach(detach_26)  # strides=(4194304, 2048, 1), contiguous=True, view=True
-    grad_h3_mlp_threshold_backward: 'bfloat16[32, 2048, 2048]' = aten.threshold_backward(grad_h3_mlp__to_copy, grad_h3_mlp_detach, 0)  # strides=(4194304, 2048, 1), contiguous=True, view=False
+    # FUSED: squared_relu backward
+    grad_h3_mlp_threshold_backward: 'bfloat16[32, 2048, 2048]' = triton_squared_relu_bwd(grad_h3_mlp_c_proj__to_copy, _to_copy_31, detach_26)
 
     # grad of self.transformer.h.3.mlp.c_fc (Linear) → d_loss/d_c_fc
     # /.autoresearch_repo/train.py:101
@@ -3398,12 +3407,8 @@ def backward(
     # grad of self.transformer.h.2.mlp (MLP) → d_loss/d_mlp
     # /.autoresearch_repo/train.py:102
     # x = F.relu(x).square()
-    grad_h2_mlp_pow: 'float32[32, 2048, 2048]' = aten.pow.Tensor_Scalar(_to_copy_22, 1.0)  # strides=(4194304, 2048, 1), contiguous=True, view=False
-    grad_h2_mlp_mul: 'float32[32, 2048, 2048]' = aten.mul.Scalar(grad_h2_mlp_pow, 2.0)  # strides=(4194304, 2048, 1), contiguous=True, view=False
-    grad_h2_mlp_mul_1: 'float32[32, 2048, 2048]' = aten.mul.Tensor(grad_h2_mlp_c_proj__to_copy, grad_h2_mlp_mul)  # strides=(4194304, 2048, 1), contiguous=True, view=False
-    grad_h2_mlp__to_copy: 'bfloat16[32, 2048, 2048]' = aten._to_copy(grad_h2_mlp_mul_1, dtype=torch.bfloat16, layout=torch.strided, device=torch.device('cuda:0'))  # strides=(4194304, 2048, 1), contiguous=True, view=False
-    grad_h2_mlp_detach: 'bfloat16[32, 2048, 2048]' = aten.detach(detach_19)  # strides=(4194304, 2048, 1), contiguous=True, view=True
-    grad_h2_mlp_threshold_backward: 'bfloat16[32, 2048, 2048]' = aten.threshold_backward(grad_h2_mlp__to_copy, grad_h2_mlp_detach, 0)  # strides=(4194304, 2048, 1), contiguous=True, view=False
+    # FUSED: squared_relu backward
+    grad_h2_mlp_threshold_backward: 'bfloat16[32, 2048, 2048]' = triton_squared_relu_bwd(grad_h2_mlp_c_proj__to_copy, _to_copy_22, detach_19)
 
     # grad of self.transformer.h.2.mlp.c_fc (Linear) → d_loss/d_c_fc
     # /.autoresearch_repo/train.py:101
@@ -3576,12 +3581,8 @@ def backward(
     # grad of self.transformer.h.1.mlp (MLP) → d_loss/d_mlp
     # /.autoresearch_repo/train.py:102
     # x = F.relu(x).square()
-    grad_h1_mlp_pow: 'float32[32, 2048, 2048]' = aten.pow.Tensor_Scalar(_to_copy_14, 1.0)  # strides=(4194304, 2048, 1), contiguous=True, view=False
-    grad_h1_mlp_mul: 'float32[32, 2048, 2048]' = aten.mul.Scalar(grad_h1_mlp_pow, 2.0)  # strides=(4194304, 2048, 1), contiguous=True, view=False
-    grad_h1_mlp_mul_1: 'float32[32, 2048, 2048]' = aten.mul.Tensor(grad_h1_mlp_c_proj__to_copy, grad_h1_mlp_mul)  # strides=(4194304, 2048, 1), contiguous=True, view=False
-    grad_h1_mlp__to_copy: 'bfloat16[32, 2048, 2048]' = aten._to_copy(grad_h1_mlp_mul_1, dtype=torch.bfloat16, layout=torch.strided, device=torch.device('cuda:0'))  # strides=(4194304, 2048, 1), contiguous=True, view=False
-    grad_h1_mlp_detach: 'bfloat16[32, 2048, 2048]' = aten.detach(detach_13)  # strides=(4194304, 2048, 1), contiguous=True, view=True
-    grad_h1_mlp_threshold_backward: 'bfloat16[32, 2048, 2048]' = aten.threshold_backward(grad_h1_mlp__to_copy, grad_h1_mlp_detach, 0)  # strides=(4194304, 2048, 1), contiguous=True, view=False
+    # FUSED: squared_relu backward
+    grad_h1_mlp_threshold_backward: 'bfloat16[32, 2048, 2048]' = triton_squared_relu_bwd(grad_h1_mlp_c_proj__to_copy, _to_copy_14, detach_13)
 
     # grad of self.transformer.h.1.mlp.c_fc (Linear) → d_loss/d_c_fc
     # /.autoresearch_repo/train.py:101
@@ -3791,12 +3792,8 @@ def backward(
     # grad of self.transformer.h.0.mlp (MLP) → d_loss/d_mlp
     # /.autoresearch_repo/train.py:102
     # x = F.relu(x).square()
-    grad_h0_mlp_pow: 'float32[32, 2048, 2048]' = aten.pow.Tensor_Scalar(_to_copy_5, 1.0)  # strides=(4194304, 2048, 1), contiguous=True, view=False
-    grad_h0_mlp_mul: 'float32[32, 2048, 2048]' = aten.mul.Scalar(grad_h0_mlp_pow, 2.0)  # strides=(4194304, 2048, 1), contiguous=True, view=False
-    grad_h0_mlp_mul_1: 'float32[32, 2048, 2048]' = aten.mul.Tensor(grad_h0_mlp_c_proj__to_copy, grad_h0_mlp_mul)  # strides=(4194304, 2048, 1), contiguous=True, view=False
-    grad_h0_mlp__to_copy: 'bfloat16[32, 2048, 2048]' = aten._to_copy(grad_h0_mlp_mul_1, dtype=torch.bfloat16, layout=torch.strided, device=torch.device('cuda:0'))  # strides=(4194304, 2048, 1), contiguous=True, view=False
-    grad_h0_mlp_detach: 'bfloat16[32, 2048, 2048]' = aten.detach(detach_6)  # strides=(4194304, 2048, 1), contiguous=True, view=True
-    grad_h0_mlp_threshold_backward: 'bfloat16[32, 2048, 2048]' = aten.threshold_backward(grad_h0_mlp__to_copy, grad_h0_mlp_detach, 0)  # strides=(4194304, 2048, 1), contiguous=True, view=False
+    # FUSED: squared_relu backward
+    grad_h0_mlp_threshold_backward: 'bfloat16[32, 2048, 2048]' = triton_squared_relu_bwd(grad_h0_mlp_c_proj__to_copy, _to_copy_5, detach_6)
 
     # grad of self.transformer.h.0.mlp.c_fc (Linear) → d_loss/d_c_fc
     # /.autoresearch_repo/train.py:101

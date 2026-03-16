@@ -22,5 +22,11 @@
     "median_ms": 71.0664,
     "final_loss": 9.128914,
     "description": "Fuse softcap fwd (bf16\u2192fp32+div+tanh+mul) and bwd (mul+tanh_bwd+div+to_bf16) into Triton kernels"
+  },
+  {
+    "name": "lambda_scale",
+    "median_ms": 69.8046,
+    "final_loss": 9.129214,
+    "description": "Fuse lambda scaling (a*x + b*x0) into single Triton kernel (8 instances)"
   }
 ]

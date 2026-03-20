@@ -507,7 +507,6 @@ def forward(
     rms_norm__fused_rms_norm = aten._fused_rms_norm(wte_embedding, [512], None, None)  # out0: strides=(1048576, 512, 1), contiguous=True; out1: strides=(2048, 1, 1), contiguous=True, view=False
     rms_norm_getitem: 'bfloat16[32, 2048, 512]' = operator.getitem(rms_norm__fused_rms_norm, 0)  # strides=(1048576, 512, 1), contiguous=True, view=True
     rms_norm_getitem_1: 'float32[32, 2048, 1]' = operator.getitem(rms_norm__fused_rms_norm, 1)  # strides=(2048, 1, 1), contiguous=True, view=True
-    rms_norm_detach: 'float32[32, 2048, 1]' = aten.detach(rms_norm_getitem_1)  # strides=(2048, 1, 1), contiguous=True, view=True
 
     # /.autoresearch_repo/train.py:272
     # x = self.resid_lambdas[i] * x + self.x0_lambdas[i] * x0
@@ -525,7 +524,6 @@ def forward(
     h0__fused_rms_norm = aten._fused_rms_norm(add_add, [512], None, None)  # out0: strides=(1048576, 512, 1), contiguous=True; out1: strides=(2048, 1, 1), contiguous=True, view=False
     h0_getitem: 'bfloat16[32, 2048, 512]' = operator.getitem(h0__fused_rms_norm, 0)  # strides=(1048576, 512, 1), contiguous=True, view=True
     h0_getitem_1: 'float32[32, 2048, 1]' = operator.getitem(h0__fused_rms_norm, 1)  # strides=(2048, 1, 1), contiguous=True, view=True
-    h0_detach: 'float32[32, 2048, 1]' = aten.detach(h0_getitem_1)  # strides=(2048, 1, 1), contiguous=True, view=True
 
     # self.transformer.h.0.attn.c_q (Linear)
     # /.autoresearch_repo/train.py:74
@@ -575,11 +573,9 @@ def forward(
     h0_attn__fused_rms_norm = aten._fused_rms_norm(h0_attn_cat, [128], None, None)  # out0: strides=(1048576, 512, 128, 1), contiguous=True; out1: strides=(8192, 4, 1, 1), contiguous=True, view=False
     h0_attn_getitem: 'bfloat16[32, 2048, 4, 128]' = operator.getitem(h0_attn__fused_rms_norm, 0)  # strides=(1048576, 512, 128, 1), contiguous=True, view=True
     h0_attn_getitem_1: 'float32[32, 2048, 4, 1]' = operator.getitem(h0_attn__fused_rms_norm, 1)  # strides=(8192, 4, 1, 1), contiguous=True, view=True
-    h0_attn_detach: 'float32[32, 2048, 4, 1]' = aten.detach(h0_attn_getitem_1)  # strides=(8192, 4, 1, 1), contiguous=True, view=True
     h0_attn__fused_rms_norm_1 = aten._fused_rms_norm(h0_attn_cat_1, [128], None, None)  # out0: strides=(1048576, 512, 128, 1), contiguous=True; out1: strides=(8192, 4, 1, 1), contiguous=True, view=False
     h0_attn_getitem_2: 'bfloat16[32, 2048, 4, 128]' = operator.getitem(h0_attn__fused_rms_norm_1, 0)  # strides=(1048576, 512, 128, 1), contiguous=True, view=True
     h0_attn_getitem_3: 'float32[32, 2048, 4, 1]' = operator.getitem(h0_attn__fused_rms_norm_1, 1)  # strides=(8192, 4, 1, 1), contiguous=True, view=True
-    h0_attn_detach_1: 'float32[32, 2048, 4, 1]' = aten.detach(h0_attn_getitem_3)  # strides=(8192, 4, 1, 1), contiguous=True, view=True
     h0_attn_transpose: 'bfloat16[32, 4, 2048, 128]' = aten.transpose.int(h0_attn_getitem, 1, 2)  # strides=(1048576, 128, 512, 1), contiguous=False, view=True
     h0_attn_transpose_1: 'bfloat16[32, 4, 2048, 128]' = aten.transpose.int(h0_attn_getitem_2, 1, 2)  # strides=(1048576, 128, 512, 1), contiguous=False, view=True
     h0_attn_transpose_2: 'bfloat16[32, 4, 2048, 128]' = aten.transpose.int(h0_attn_view_2, 1, 2)  # strides=(1048576, 128, 512, 1), contiguous=False, view=True
@@ -601,7 +597,6 @@ def forward(
     h0_attn_getitem_5: 'float32[32, 4, 2048, 1]' = operator.getitem(h0_attn__scaled_dot_product_cudnn_attention, 1)  # strides=(8192, 2048, 1, 1), contiguous=True, view=True
     h0_attn_getitem_6: 'int64[]' = operator.getitem(h0_attn__scaled_dot_product_cudnn_attention, 6)  # strides=(), contiguous=True, view=True
     h0_attn_getitem_7: 'int64[]' = operator.getitem(h0_attn__scaled_dot_product_cudnn_attention, 7)  # strides=(), contiguous=True, view=True
-    h0_attn_detach_2: 'bfloat16[32, 4, 2048, 128]' = aten.detach(h0_attn_getitem_4)  # strides=(1048576, 128, 512, 1), contiguous=False, view=True
     h0_attn_transpose_3: 'bfloat16[32, 2048, 4, 128]' = aten.transpose.int(h0_attn_getitem_4, 1, 2)  # strides=(1048576, 512, 128, 1), contiguous=True, view=True
     h0_attn_view_3: 'bfloat16[32, 2048, 512]' = aten.view(h0_attn_transpose_3, [32, 2048, -1])  # strides=(1048576, 512, 1), contiguous=True, view=True
 
@@ -620,7 +615,6 @@ def forward(
     h0_add, h0__fused_rms_norm_1 = torch_add_rmsnorm(add_add, h0_attn_c_proj__unsafe_view, [512])
     h0_getitem_2 = operator.getitem(h0__fused_rms_norm_1, 0)
     h0_getitem_3 = operator.getitem(h0__fused_rms_norm_1, 1)
-    h0_detach_1: 'float32[32, 2048, 1]' = aten.detach(h0_getitem_3)  # strides=(2048, 1, 1), contiguous=True, view=True
 
     # self.transformer.h.0.mlp.c_fc (Linear)
     # /.autoresearch_repo/train.py:101
@@ -677,7 +671,6 @@ def forward(
     h1__fused_rms_norm = aten._fused_rms_norm(add_8_add, [512], None, None)  # out0: strides=(1048576, 512, 1), contiguous=True; out1: strides=(2048, 1, 1), contiguous=True, view=False
     h1_getitem: 'bfloat16[32, 2048, 512]' = operator.getitem(h1__fused_rms_norm, 0)  # strides=(1048576, 512, 1), contiguous=True, view=True
     h1_getitem_1: 'float32[32, 2048, 1]' = operator.getitem(h1__fused_rms_norm, 1)  # strides=(2048, 1, 1), contiguous=True, view=True
-    h1_detach: 'float32[32, 2048, 1]' = aten.detach(h1_getitem_1)  # strides=(2048, 1, 1), contiguous=True, view=True
 
     # self.transformer.h.1.attn.c_q (Linear)
     # /.autoresearch_repo/train.py:74
@@ -736,7 +729,6 @@ def forward(
     # /.autoresearch_repo/train.py:81
     # gate = 2 * torch.sigmoid(self.ve_gate(x[..., :self.ve_gate_channels]))
     h1_attn_sigmoid: 'bfloat16[32, 2048, 4]' = aten.sigmoid(h1_attn_ve_gate__unsafe_view)  # strides=(8192, 4, 1), contiguous=True, view=False
-    h1_attn_detach: 'bfloat16[32, 2048, 4]' = aten.detach(h1_attn_sigmoid)  # strides=(8192, 4, 1), contiguous=True, view=True
     h1_attn_mul: 'bfloat16[32, 2048, 4]' = aten.mul.Tensor(h1_attn_sigmoid, 2)  # strides=(8192, 4, 1), contiguous=True, view=False
     h1_attn_unsqueeze: 'bfloat16[32, 2048, 4, 1]' = aten.unsqueeze(h1_attn_mul, -1)  # strides=(8192, 4, 1, 1), contiguous=True, view=True
     h1_attn_mul_1: 'bfloat16[32, 2048, 4, 128]' = aten.mul.Tensor(h1_attn_unsqueeze, h1_attn_view_3)  # strides=(1048576, 512, 128, 1), contiguous=True, view=False
@@ -748,11 +740,9 @@ def forward(
     h1_attn__fused_rms_norm = aten._fused_rms_norm(h1_attn_cat, [128], None, None)  # out0: strides=(1048576, 512, 128, 1), contiguous=True; out1: strides=(8192, 4, 1, 1), contiguous=True, view=False
     h1_attn_getitem: 'bfloat16[32, 2048, 4, 128]' = operator.getitem(h1_attn__fused_rms_norm, 0)  # strides=(1048576, 512, 128, 1), contiguous=True, view=True
     h1_attn_getitem_1: 'float32[32, 2048, 4, 1]' = operator.getitem(h1_attn__fused_rms_norm, 1)  # strides=(8192, 4, 1, 1), contiguous=True, view=True
-    h1_attn_detach_1: 'float32[32, 2048, 4, 1]' = aten.detach(h1_attn_getitem_1)  # strides=(8192, 4, 1, 1), contiguous=True, view=True
     h1_attn__fused_rms_norm_1 = aten._fused_rms_norm(h1_attn_cat_1, [128], None, None)  # out0: strides=(1048576, 512, 128, 1), contiguous=True; out1: strides=(8192, 4, 1, 1), contiguous=True, view=False
     h1_attn_getitem_2: 'bfloat16[32, 2048, 4, 128]' = operator.getitem(h1_attn__fused_rms_norm_1, 0)  # strides=(1048576, 512, 128, 1), contiguous=True, view=True
     h1_attn_getitem_3: 'float32[32, 2048, 4, 1]' = operator.getitem(h1_attn__fused_rms_norm_1, 1)  # strides=(8192, 4, 1, 1), contiguous=True, view=True
-    h1_attn_detach_2: 'float32[32, 2048, 4, 1]' = aten.detach(h1_attn_getitem_3)  # strides=(8192, 4, 1, 1), contiguous=True, view=True
     h1_attn_transpose: 'bfloat16[32, 4, 2048, 128]' = aten.transpose.int(h1_attn_getitem, 1, 2)  # strides=(1048576, 128, 512, 1), contiguous=False, view=True
     h1_attn_transpose_1: 'bfloat16[32, 4, 2048, 128]' = aten.transpose.int(h1_attn_getitem_2, 1, 2)  # strides=(1048576, 128, 512, 1), contiguous=False, view=True
     h1_attn_transpose_2: 'bfloat16[32, 4, 2048, 128]' = aten.transpose.int(h1_attn_add, 1, 2)  # strides=(1048576, 128, 512, 1), contiguous=False, view=True
@@ -762,7 +752,6 @@ def forward(
     h1_attn_getitem_5: 'float32[32, 4, 2048, 1]' = operator.getitem(h1_attn__scaled_dot_product_cudnn_attention, 1)  # strides=(8192, 2048, 1, 1), contiguous=True, view=True
     h1_attn_getitem_6: 'int64[]' = operator.getitem(h1_attn__scaled_dot_product_cudnn_attention, 6)  # strides=(), contiguous=True, view=True
     h1_attn_getitem_7: 'int64[]' = operator.getitem(h1_attn__scaled_dot_product_cudnn_attention, 7)  # strides=(), contiguous=True, view=True
-    h1_attn_detach_3: 'bfloat16[32, 4, 2048, 128]' = aten.detach(h1_attn_getitem_4)  # strides=(1048576, 128, 512, 1), contiguous=False, view=True
     h1_attn_transpose_3: 'bfloat16[32, 2048, 4, 128]' = aten.transpose.int(h1_attn_getitem_4, 1, 2)  # strides=(1048576, 512, 128, 1), contiguous=True, view=True
     h1_attn_view_4: 'bfloat16[32, 2048, 512]' = aten.view(h1_attn_transpose_3, [32, 2048, -1])  # strides=(1048576, 512, 1), contiguous=True, view=True
 
@@ -781,7 +770,6 @@ def forward(
     h1_add, h1__fused_rms_norm_1 = torch_add_rmsnorm(add_8_add, h1_attn_c_proj__unsafe_view, [512])
     h1_getitem_2 = operator.getitem(h1__fused_rms_norm_1, 0)
     h1_getitem_3 = operator.getitem(h1__fused_rms_norm_1, 1)
-    h1_detach_1: 'float32[32, 2048, 1]' = aten.detach(h1_getitem_3)  # strides=(2048, 1, 1), contiguous=True, view=True
 
     # self.transformer.h.1.mlp.c_fc (Linear)
     # /.autoresearch_repo/train.py:101
@@ -830,7 +818,6 @@ def forward(
     h2__fused_rms_norm = aten._fused_rms_norm(add_17_add, [512], None, None)  # out0: strides=(1048576, 512, 1), contiguous=True; out1: strides=(2048, 1, 1), contiguous=True, view=False
     h2_getitem: 'bfloat16[32, 2048, 512]' = operator.getitem(h2__fused_rms_norm, 0)  # strides=(1048576, 512, 1), contiguous=True, view=True
     h2_getitem_1: 'float32[32, 2048, 1]' = operator.getitem(h2__fused_rms_norm, 1)  # strides=(2048, 1, 1), contiguous=True, view=True
-    h2_detach: 'float32[32, 2048, 1]' = aten.detach(h2_getitem_1)  # strides=(2048, 1, 1), contiguous=True, view=True
 
     # self.transformer.h.2.attn.c_q (Linear)
     # /.autoresearch_repo/train.py:74
@@ -880,11 +867,9 @@ def forward(
     h2_attn__fused_rms_norm = aten._fused_rms_norm(h2_attn_cat, [128], None, None)  # out0: strides=(1048576, 512, 128, 1), contiguous=True; out1: strides=(8192, 4, 1, 1), contiguous=True, view=False
     h2_attn_getitem: 'bfloat16[32, 2048, 4, 128]' = operator.getitem(h2_attn__fused_rms_norm, 0)  # strides=(1048576, 512, 128, 1), contiguous=True, view=True
     h2_attn_getitem_1: 'float32[32, 2048, 4, 1]' = operator.getitem(h2_attn__fused_rms_norm, 1)  # strides=(8192, 4, 1, 1), contiguous=True, view=True
-    h2_attn_detach: 'float32[32, 2048, 4, 1]' = aten.detach(h2_attn_getitem_1)  # strides=(8192, 4, 1, 1), contiguous=True, view=True
     h2_attn__fused_rms_norm_1 = aten._fused_rms_norm(h2_attn_cat_1, [128], None, None)  # out0: strides=(1048576, 512, 128, 1), contiguous=True; out1: strides=(8192, 4, 1, 1), contiguous=True, view=False
     h2_attn_getitem_2: 'bfloat16[32, 2048, 4, 128]' = operator.getitem(h2_attn__fused_rms_norm_1, 0)  # strides=(1048576, 512, 128, 1), contiguous=True, view=True
     h2_attn_getitem_3: 'float32[32, 2048, 4, 1]' = operator.getitem(h2_attn__fused_rms_norm_1, 1)  # strides=(8192, 4, 1, 1), contiguous=True, view=True
-    h2_attn_detach_1: 'float32[32, 2048, 4, 1]' = aten.detach(h2_attn_getitem_3)  # strides=(8192, 4, 1, 1), contiguous=True, view=True
     h2_attn_transpose: 'bfloat16[32, 4, 2048, 128]' = aten.transpose.int(h2_attn_getitem, 1, 2)  # strides=(1048576, 128, 512, 1), contiguous=False, view=True
     h2_attn_transpose_1: 'bfloat16[32, 4, 2048, 128]' = aten.transpose.int(h2_attn_getitem_2, 1, 2)  # strides=(1048576, 128, 512, 1), contiguous=False, view=True
     h2_attn_transpose_2: 'bfloat16[32, 4, 2048, 128]' = aten.transpose.int(h2_attn_view_2, 1, 2)  # strides=(1048576, 128, 512, 1), contiguous=False, view=True
@@ -894,7 +879,6 @@ def forward(
     h2_attn_getitem_5: 'float32[32, 4, 2048, 1]' = operator.getitem(h2_attn__scaled_dot_product_cudnn_attention, 1)  # strides=(8192, 2048, 1, 1), contiguous=True, view=True
     h2_attn_getitem_6: 'int64[]' = operator.getitem(h2_attn__scaled_dot_product_cudnn_attention, 6)  # strides=(), contiguous=True, view=True
     h2_attn_getitem_7: 'int64[]' = operator.getitem(h2_attn__scaled_dot_product_cudnn_attention, 7)  # strides=(), contiguous=True, view=True
-    h2_attn_detach_2: 'bfloat16[32, 4, 2048, 128]' = aten.detach(h2_attn_getitem_4)  # strides=(1048576, 128, 512, 1), contiguous=False, view=True
     h2_attn_transpose_3: 'bfloat16[32, 2048, 4, 128]' = aten.transpose.int(h2_attn_getitem_4, 1, 2)  # strides=(1048576, 512, 128, 1), contiguous=True, view=True
     h2_attn_view_3: 'bfloat16[32, 2048, 512]' = aten.view(h2_attn_transpose_3, [32, 2048, -1])  # strides=(1048576, 512, 1), contiguous=True, view=True
 
@@ -913,7 +897,6 @@ def forward(
     h2_add, h2__fused_rms_norm_1 = torch_add_rmsnorm(add_17_add, h2_attn_c_proj__unsafe_view, [512])
     h2_getitem_2 = operator.getitem(h2__fused_rms_norm_1, 0)
     h2_getitem_3 = operator.getitem(h2__fused_rms_norm_1, 1)
-    h2_detach_1: 'float32[32, 2048, 1]' = aten.detach(h2_getitem_3)  # strides=(2048, 1, 1), contiguous=True, view=True
 
     # self.transformer.h.2.mlp.c_fc (Linear)
     # /.autoresearch_repo/train.py:101
@@ -970,7 +953,6 @@ def forward(
     h3__fused_rms_norm = aten._fused_rms_norm(add_25_add, [512], None, None)  # out0: strides=(1048576, 512, 1), contiguous=True; out1: strides=(2048, 1, 1), contiguous=True, view=False
     h3_getitem: 'bfloat16[32, 2048, 512]' = operator.getitem(h3__fused_rms_norm, 0)  # strides=(1048576, 512, 1), contiguous=True, view=True
     h3_getitem_1: 'float32[32, 2048, 1]' = operator.getitem(h3__fused_rms_norm, 1)  # strides=(2048, 1, 1), contiguous=True, view=True
-    h3_detach: 'float32[32, 2048, 1]' = aten.detach(h3_getitem_1)  # strides=(2048, 1, 1), contiguous=True, view=True
 
     # self.transformer.h.3.attn.c_q (Linear)
     # /.autoresearch_repo/train.py:74
@@ -1029,7 +1011,6 @@ def forward(
     # /.autoresearch_repo/train.py:81
     # gate = 2 * torch.sigmoid(self.ve_gate(x[..., :self.ve_gate_channels]))
     h3_attn_sigmoid: 'bfloat16[32, 2048, 4]' = aten.sigmoid(h3_attn_ve_gate__unsafe_view)  # strides=(8192, 4, 1), contiguous=True, view=False
-    h3_attn_detach: 'bfloat16[32, 2048, 4]' = aten.detach(h3_attn_sigmoid)  # strides=(8192, 4, 1), contiguous=True, view=True
     h3_attn_mul: 'bfloat16[32, 2048, 4]' = aten.mul.Tensor(h3_attn_sigmoid, 2)  # strides=(8192, 4, 1), contiguous=True, view=False
     h3_attn_unsqueeze: 'bfloat16[32, 2048, 4, 1]' = aten.unsqueeze(h3_attn_mul, -1)  # strides=(8192, 4, 1, 1), contiguous=True, view=True
     h3_attn_mul_1: 'bfloat16[32, 2048, 4, 128]' = aten.mul.Tensor(h3_attn_unsqueeze, h3_attn_view_3)  # strides=(1048576, 512, 128, 1), contiguous=True, view=False
@@ -1041,11 +1022,9 @@ def forward(
     h3_attn__fused_rms_norm = aten._fused_rms_norm(h3_attn_cat, [128], None, None)  # out0: strides=(1048576, 512, 128, 1), contiguous=True; out1: strides=(8192, 4, 1, 1), contiguous=True, view=False
     h3_attn_getitem: 'bfloat16[32, 2048, 4, 128]' = operator.getitem(h3_attn__fused_rms_norm, 0)  # strides=(1048576, 512, 128, 1), contiguous=True, view=True
     h3_attn_getitem_1: 'float32[32, 2048, 4, 1]' = operator.getitem(h3_attn__fused_rms_norm, 1)  # strides=(8192, 4, 1, 1), contiguous=True, view=True
-    h3_attn_detach_1: 'float32[32, 2048, 4, 1]' = aten.detach(h3_attn_getitem_1)  # strides=(8192, 4, 1, 1), contiguous=True, view=True
     h3_attn__fused_rms_norm_1 = aten._fused_rms_norm(h3_attn_cat_1, [128], None, None)  # out0: strides=(1048576, 512, 128, 1), contiguous=True; out1: strides=(8192, 4, 1, 1), contiguous=True, view=False
     h3_attn_getitem_2: 'bfloat16[32, 2048, 4, 128]' = operator.getitem(h3_attn__fused_rms_norm_1, 0)  # strides=(1048576, 512, 128, 1), contiguous=True, view=True
     h3_attn_getitem_3: 'float32[32, 2048, 4, 1]' = operator.getitem(h3_attn__fused_rms_norm_1, 1)  # strides=(8192, 4, 1, 1), contiguous=True, view=True
-    h3_attn_detach_2: 'float32[32, 2048, 4, 1]' = aten.detach(h3_attn_getitem_3)  # strides=(8192, 4, 1, 1), contiguous=True, view=True
     h3_attn_transpose: 'bfloat16[32, 4, 2048, 128]' = aten.transpose.int(h3_attn_getitem, 1, 2)  # strides=(1048576, 128, 512, 1), contiguous=False, view=True
     h3_attn_transpose_1: 'bfloat16[32, 4, 2048, 128]' = aten.transpose.int(h3_attn_getitem_2, 1, 2)  # strides=(1048576, 128, 512, 1), contiguous=False, view=True
     h3_attn_transpose_2: 'bfloat16[32, 4, 2048, 128]' = aten.transpose.int(h3_attn_add, 1, 2)  # strides=(1048576, 128, 512, 1), contiguous=False, view=True
@@ -1054,7 +1033,6 @@ def forward(
     h3_attn_getitem_5: 'float32[32, 4, 2048, 1]' = operator.getitem(h3_attn__scaled_dot_product_cudnn_attention, 1)  # strides=(8192, 2048, 1, 1), contiguous=True, view=True
     h3_attn_getitem_6: 'int64[]' = operator.getitem(h3_attn__scaled_dot_product_cudnn_attention, 6)  # strides=(), contiguous=True, view=True
     h3_attn_getitem_7: 'int64[]' = operator.getitem(h3_attn__scaled_dot_product_cudnn_attention, 7)  # strides=(), contiguous=True, view=True
-    h3_attn_detach_3: 'bfloat16[32, 4, 2048, 128]' = aten.detach(h3_attn_getitem_4)  # strides=(1048576, 128, 512, 1), contiguous=False, view=True
     h3_attn_transpose_3: 'bfloat16[32, 2048, 4, 128]' = aten.transpose.int(h3_attn_getitem_4, 1, 2)  # strides=(1048576, 512, 128, 1), contiguous=True, view=True
     h3_attn_view_4: 'bfloat16[32, 2048, 512]' = aten.view(h3_attn_transpose_3, [32, 2048, -1])  # strides=(1048576, 512, 1), contiguous=True, view=True
 
@@ -1073,7 +1051,6 @@ def forward(
     h3_add, h3__fused_rms_norm_1 = torch_add_rmsnorm(add_25_add, h3_attn_c_proj__unsafe_view, [512])
     h3_getitem_2 = operator.getitem(h3__fused_rms_norm_1, 0)
     h3_getitem_3 = operator.getitem(h3__fused_rms_norm_1, 1)
-    h3_detach_1: 'float32[32, 2048, 1]' = aten.detach(h3_getitem_3)  # strides=(2048, 1, 1), contiguous=True, view=True
 
     # self.transformer.h.3.mlp.c_fc (Linear)
     # /.autoresearch_repo/train.py:101
@@ -1122,7 +1099,6 @@ def forward(
     h4__fused_rms_norm = aten._fused_rms_norm(add_33_add, [512], None, None)  # out0: strides=(1048576, 512, 1), contiguous=True; out1: strides=(2048, 1, 1), contiguous=True, view=False
     h4_getitem: 'bfloat16[32, 2048, 512]' = operator.getitem(h4__fused_rms_norm, 0)  # strides=(1048576, 512, 1), contiguous=True, view=True
     h4_getitem_1: 'float32[32, 2048, 1]' = operator.getitem(h4__fused_rms_norm, 1)  # strides=(2048, 1, 1), contiguous=True, view=True
-    h4_detach: 'float32[32, 2048, 1]' = aten.detach(h4_getitem_1)  # strides=(2048, 1, 1), contiguous=True, view=True
 
     # self.transformer.h.4.attn.c_q (Linear)
     # /.autoresearch_repo/train.py:74
@@ -1172,11 +1148,9 @@ def forward(
     h4_attn__fused_rms_norm = aten._fused_rms_norm(h4_attn_cat, [128], None, None)  # out0: strides=(1048576, 512, 128, 1), contiguous=True; out1: strides=(8192, 4, 1, 1), contiguous=True, view=False
     h4_attn_getitem: 'bfloat16[32, 2048, 4, 128]' = operator.getitem(h4_attn__fused_rms_norm, 0)  # strides=(1048576, 512, 128, 1), contiguous=True, view=True
     h4_attn_getitem_1: 'float32[32, 2048, 4, 1]' = operator.getitem(h4_attn__fused_rms_norm, 1)  # strides=(8192, 4, 1, 1), contiguous=True, view=True
-    h4_attn_detach: 'float32[32, 2048, 4, 1]' = aten.detach(h4_attn_getitem_1)  # strides=(8192, 4, 1, 1), contiguous=True, view=True
     h4_attn__fused_rms_norm_1 = aten._fused_rms_norm(h4_attn_cat_1, [128], None, None)  # out0: strides=(1048576, 512, 128, 1), contiguous=True; out1: strides=(8192, 4, 1, 1), contiguous=True, view=False
     h4_attn_getitem_2: 'bfloat16[32, 2048, 4, 128]' = operator.getitem(h4_attn__fused_rms_norm_1, 0)  # strides=(1048576, 512, 128, 1), contiguous=True, view=True
     h4_attn_getitem_3: 'float32[32, 2048, 4, 1]' = operator.getitem(h4_attn__fused_rms_norm_1, 1)  # strides=(8192, 4, 1, 1), contiguous=True, view=True
-    h4_attn_detach_1: 'float32[32, 2048, 4, 1]' = aten.detach(h4_attn_getitem_3)  # strides=(8192, 4, 1, 1), contiguous=True, view=True
     h4_attn_transpose: 'bfloat16[32, 4, 2048, 128]' = aten.transpose.int(h4_attn_getitem, 1, 2)  # strides=(1048576, 128, 512, 1), contiguous=False, view=True
     h4_attn_transpose_1: 'bfloat16[32, 4, 2048, 128]' = aten.transpose.int(h4_attn_getitem_2, 1, 2)  # strides=(1048576, 128, 512, 1), contiguous=False, view=True
     h4_attn_transpose_2: 'bfloat16[32, 4, 2048, 128]' = aten.transpose.int(h4_attn_view_2, 1, 2)  # strides=(1048576, 128, 512, 1), contiguous=False, view=True
@@ -1186,7 +1160,6 @@ def forward(
     h4_attn_getitem_5: 'float32[32, 4, 2048, 1]' = operator.getitem(h4_attn__scaled_dot_product_cudnn_attention, 1)  # strides=(8192, 2048, 1, 1), contiguous=True, view=True
     h4_attn_getitem_6: 'int64[]' = operator.getitem(h4_attn__scaled_dot_product_cudnn_attention, 6)  # strides=(), contiguous=True, view=True
     h4_attn_getitem_7: 'int64[]' = operator.getitem(h4_attn__scaled_dot_product_cudnn_attention, 7)  # strides=(), contiguous=True, view=True
-    h4_attn_detach_2: 'bfloat16[32, 4, 2048, 128]' = aten.detach(h4_attn_getitem_4)  # strides=(1048576, 128, 512, 1), contiguous=False, view=True
     h4_attn_transpose_3: 'bfloat16[32, 2048, 4, 128]' = aten.transpose.int(h4_attn_getitem_4, 1, 2)  # strides=(1048576, 512, 128, 1), contiguous=True, view=True
     h4_attn_view_3: 'bfloat16[32, 2048, 512]' = aten.view(h4_attn_transpose_3, [32, 2048, -1])  # strides=(1048576, 512, 1), contiguous=True, view=True
 
@@ -1205,7 +1178,6 @@ def forward(
     h4_add, h4__fused_rms_norm_1 = torch_add_rmsnorm(add_33_add, h4_attn_c_proj__unsafe_view, [512])
     h4_getitem_2 = operator.getitem(h4__fused_rms_norm_1, 0)
     h4_getitem_3 = operator.getitem(h4__fused_rms_norm_1, 1)
-    h4_detach_1: 'float32[32, 2048, 1]' = aten.detach(h4_getitem_3)  # strides=(2048, 1, 1), contiguous=True, view=True
 
     # self.transformer.h.4.mlp.c_fc (Linear)
     # /.autoresearch_repo/train.py:101
@@ -1262,7 +1234,6 @@ def forward(
     h5__fused_rms_norm = aten._fused_rms_norm(add_41_add, [512], None, None)  # out0: strides=(1048576, 512, 1), contiguous=True; out1: strides=(2048, 1, 1), contiguous=True, view=False
     h5_getitem: 'bfloat16[32, 2048, 512]' = operator.getitem(h5__fused_rms_norm, 0)  # strides=(1048576, 512, 1), contiguous=True, view=True
     h5_getitem_1: 'float32[32, 2048, 1]' = operator.getitem(h5__fused_rms_norm, 1)  # strides=(2048, 1, 1), contiguous=True, view=True
-    h5_detach: 'float32[32, 2048, 1]' = aten.detach(h5_getitem_1)  # strides=(2048, 1, 1), contiguous=True, view=True
 
     # self.transformer.h.5.attn.c_q (Linear)
     # /.autoresearch_repo/train.py:74
@@ -1321,7 +1292,6 @@ def forward(
     # /.autoresearch_repo/train.py:81
     # gate = 2 * torch.sigmoid(self.ve_gate(x[..., :self.ve_gate_channels]))
     h5_attn_sigmoid: 'bfloat16[32, 2048, 4]' = aten.sigmoid(h5_attn_ve_gate__unsafe_view)  # strides=(8192, 4, 1), contiguous=True, view=False
-    h5_attn_detach: 'bfloat16[32, 2048, 4]' = aten.detach(h5_attn_sigmoid)  # strides=(8192, 4, 1), contiguous=True, view=True
     h5_attn_mul: 'bfloat16[32, 2048, 4]' = aten.mul.Tensor(h5_attn_sigmoid, 2)  # strides=(8192, 4, 1), contiguous=True, view=False
     h5_attn_unsqueeze: 'bfloat16[32, 2048, 4, 1]' = aten.unsqueeze(h5_attn_mul, -1)  # strides=(8192, 4, 1, 1), contiguous=True, view=True
     h5_attn_mul_1: 'bfloat16[32, 2048, 4, 128]' = aten.mul.Tensor(h5_attn_unsqueeze, h5_attn_view_3)  # strides=(1048576, 512, 128, 1), contiguous=True, view=False
@@ -1333,11 +1303,9 @@ def forward(
     h5_attn__fused_rms_norm = aten._fused_rms_norm(h5_attn_cat, [128], None, None)  # out0: strides=(1048576, 512, 128, 1), contiguous=True; out1: strides=(8192, 4, 1, 1), contiguous=True, view=False
     h5_attn_getitem: 'bfloat16[32, 2048, 4, 128]' = operator.getitem(h5_attn__fused_rms_norm, 0)  # strides=(1048576, 512, 128, 1), contiguous=True, view=True
     h5_attn_getitem_1: 'float32[32, 2048, 4, 1]' = operator.getitem(h5_attn__fused_rms_norm, 1)  # strides=(8192, 4, 1, 1), contiguous=True, view=True
-    h5_attn_detach_1: 'float32[32, 2048, 4, 1]' = aten.detach(h5_attn_getitem_1)  # strides=(8192, 4, 1, 1), contiguous=True, view=True
     h5_attn__fused_rms_norm_1 = aten._fused_rms_norm(h5_attn_cat_1, [128], None, None)  # out0: strides=(1048576, 512, 128, 1), contiguous=True; out1: strides=(8192, 4, 1, 1), contiguous=True, view=False
     h5_attn_getitem_2: 'bfloat16[32, 2048, 4, 128]' = operator.getitem(h5_attn__fused_rms_norm_1, 0)  # strides=(1048576, 512, 128, 1), contiguous=True, view=True
     h5_attn_getitem_3: 'float32[32, 2048, 4, 1]' = operator.getitem(h5_attn__fused_rms_norm_1, 1)  # strides=(8192, 4, 1, 1), contiguous=True, view=True
-    h5_attn_detach_2: 'float32[32, 2048, 4, 1]' = aten.detach(h5_attn_getitem_3)  # strides=(8192, 4, 1, 1), contiguous=True, view=True
     h5_attn_transpose: 'bfloat16[32, 4, 2048, 128]' = aten.transpose.int(h5_attn_getitem, 1, 2)  # strides=(1048576, 128, 512, 1), contiguous=False, view=True
     h5_attn_transpose_1: 'bfloat16[32, 4, 2048, 128]' = aten.transpose.int(h5_attn_getitem_2, 1, 2)  # strides=(1048576, 128, 512, 1), contiguous=False, view=True
     h5_attn_transpose_2: 'bfloat16[32, 4, 2048, 128]' = aten.transpose.int(h5_attn_add, 1, 2)  # strides=(1048576, 128, 512, 1), contiguous=False, view=True
@@ -1347,7 +1315,6 @@ def forward(
     h5_attn_getitem_5: 'float32[32, 4, 2048, 1]' = operator.getitem(h5_attn__scaled_dot_product_cudnn_attention, 1)  # strides=(8192, 2048, 1, 1), contiguous=True, view=True
     h5_attn_getitem_6: 'int64[]' = operator.getitem(h5_attn__scaled_dot_product_cudnn_attention, 6)  # strides=(), contiguous=True, view=True
     h5_attn_getitem_7: 'int64[]' = operator.getitem(h5_attn__scaled_dot_product_cudnn_attention, 7)  # strides=(), contiguous=True, view=True
-    h5_attn_detach_3: 'bfloat16[32, 4, 2048, 128]' = aten.detach(h5_attn_getitem_4)  # strides=(1048576, 128, 512, 1), contiguous=False, view=True
     h5_attn_transpose_3: 'bfloat16[32, 2048, 4, 128]' = aten.transpose.int(h5_attn_getitem_4, 1, 2)  # strides=(1048576, 512, 128, 1), contiguous=True, view=True
     h5_attn_view_4: 'bfloat16[32, 2048, 512]' = aten.view(h5_attn_transpose_3, [32, 2048, -1])  # strides=(1048576, 512, 1), contiguous=True, view=True
 
@@ -1366,7 +1333,6 @@ def forward(
     h5_add, h5__fused_rms_norm_1 = torch_add_rmsnorm(add_41_add, h5_attn_c_proj__unsafe_view, [512])
     h5_getitem_2 = operator.getitem(h5__fused_rms_norm_1, 0)
     h5_getitem_3 = operator.getitem(h5__fused_rms_norm_1, 1)
-    h5_detach_1: 'float32[32, 2048, 1]' = aten.detach(h5_getitem_3)  # strides=(2048, 1, 1), contiguous=True, view=True
 
     # self.transformer.h.5.mlp.c_fc (Linear)
     # /.autoresearch_repo/train.py:101
@@ -1415,7 +1381,6 @@ def forward(
     h6__fused_rms_norm = aten._fused_rms_norm(add_50_add, [512], None, None)  # out0: strides=(1048576, 512, 1), contiguous=True; out1: strides=(2048, 1, 1), contiguous=True, view=False
     h6_getitem: 'bfloat16[32, 2048, 512]' = operator.getitem(h6__fused_rms_norm, 0)  # strides=(1048576, 512, 1), contiguous=True, view=True
     h6_getitem_1: 'float32[32, 2048, 1]' = operator.getitem(h6__fused_rms_norm, 1)  # strides=(2048, 1, 1), contiguous=True, view=True
-    h6_detach: 'float32[32, 2048, 1]' = aten.detach(h6_getitem_1)  # strides=(2048, 1, 1), contiguous=True, view=True
 
     # self.transformer.h.6.attn.c_q (Linear)
     # /.autoresearch_repo/train.py:74
@@ -1465,11 +1430,9 @@ def forward(
     h6_attn__fused_rms_norm = aten._fused_rms_norm(h6_attn_cat, [128], None, None)  # out0: strides=(1048576, 512, 128, 1), contiguous=True; out1: strides=(8192, 4, 1, 1), contiguous=True, view=False
     h6_attn_getitem: 'bfloat16[32, 2048, 4, 128]' = operator.getitem(h6_attn__fused_rms_norm, 0)  # strides=(1048576, 512, 128, 1), contiguous=True, view=True
     h6_attn_getitem_1: 'float32[32, 2048, 4, 1]' = operator.getitem(h6_attn__fused_rms_norm, 1)  # strides=(8192, 4, 1, 1), contiguous=True, view=True
-    h6_attn_detach: 'float32[32, 2048, 4, 1]' = aten.detach(h6_attn_getitem_1)  # strides=(8192, 4, 1, 1), contiguous=True, view=True
     h6_attn__fused_rms_norm_1 = aten._fused_rms_norm(h6_attn_cat_1, [128], None, None)  # out0: strides=(1048576, 512, 128, 1), contiguous=True; out1: strides=(8192, 4, 1, 1), contiguous=True, view=False
     h6_attn_getitem_2: 'bfloat16[32, 2048, 4, 128]' = operator.getitem(h6_attn__fused_rms_norm_1, 0)  # strides=(1048576, 512, 128, 1), contiguous=True, view=True
     h6_attn_getitem_3: 'float32[32, 2048, 4, 1]' = operator.getitem(h6_attn__fused_rms_norm_1, 1)  # strides=(8192, 4, 1, 1), contiguous=True, view=True
-    h6_attn_detach_1: 'float32[32, 2048, 4, 1]' = aten.detach(h6_attn_getitem_3)  # strides=(8192, 4, 1, 1), contiguous=True, view=True
     h6_attn_transpose: 'bfloat16[32, 4, 2048, 128]' = aten.transpose.int(h6_attn_getitem, 1, 2)  # strides=(1048576, 128, 512, 1), contiguous=False, view=True
     h6_attn_transpose_1: 'bfloat16[32, 4, 2048, 128]' = aten.transpose.int(h6_attn_getitem_2, 1, 2)  # strides=(1048576, 128, 512, 1), contiguous=False, view=True
     h6_attn_transpose_2: 'bfloat16[32, 4, 2048, 128]' = aten.transpose.int(h6_attn_view_2, 1, 2)  # strides=(1048576, 128, 512, 1), contiguous=False, view=True
@@ -1479,7 +1442,6 @@ def forward(
     h6_attn_getitem_5: 'float32[32, 4, 2048, 1]' = operator.getitem(h6_attn__scaled_dot_product_cudnn_attention, 1)  # strides=(8192, 2048, 1, 1), contiguous=True, view=True
     h6_attn_getitem_6: 'int64[]' = operator.getitem(h6_attn__scaled_dot_product_cudnn_attention, 6)  # strides=(), contiguous=True, view=True
     h6_attn_getitem_7: 'int64[]' = operator.getitem(h6_attn__scaled_dot_product_cudnn_attention, 7)  # strides=(), contiguous=True, view=True
-    h6_attn_detach_2: 'bfloat16[32, 4, 2048, 128]' = aten.detach(h6_attn_getitem_4)  # strides=(1048576, 128, 512, 1), contiguous=False, view=True
     h6_attn_transpose_3: 'bfloat16[32, 2048, 4, 128]' = aten.transpose.int(h6_attn_getitem_4, 1, 2)  # strides=(1048576, 512, 128, 1), contiguous=True, view=True
     h6_attn_view_3: 'bfloat16[32, 2048, 512]' = aten.view(h6_attn_transpose_3, [32, 2048, -1])  # strides=(1048576, 512, 1), contiguous=True, view=True
 
@@ -1498,7 +1460,6 @@ def forward(
     h6_add, h6__fused_rms_norm_1 = torch_add_rmsnorm(add_50_add, h6_attn_c_proj__unsafe_view, [512])
     h6_getitem_2 = operator.getitem(h6__fused_rms_norm_1, 0)
     h6_getitem_3 = operator.getitem(h6__fused_rms_norm_1, 1)
-    h6_detach_1: 'float32[32, 2048, 1]' = aten.detach(h6_getitem_3)  # strides=(2048, 1, 1), contiguous=True, view=True
 
     # self.transformer.h.6.mlp.c_fc (Linear)
     # /.autoresearch_repo/train.py:101
@@ -1555,7 +1516,6 @@ def forward(
     h7__fused_rms_norm = aten._fused_rms_norm(add_58_add, [512], None, None)  # out0: strides=(1048576, 512, 1), contiguous=True; out1: strides=(2048, 1, 1), contiguous=True, view=False
     h7_getitem: 'bfloat16[32, 2048, 512]' = operator.getitem(h7__fused_rms_norm, 0)  # strides=(1048576, 512, 1), contiguous=True, view=True
     h7_getitem_1: 'float32[32, 2048, 1]' = operator.getitem(h7__fused_rms_norm, 1)  # strides=(2048, 1, 1), contiguous=True, view=True
-    h7_detach: 'float32[32, 2048, 1]' = aten.detach(h7_getitem_1)  # strides=(2048, 1, 1), contiguous=True, view=True
 
     # self.transformer.h.7.attn.c_q (Linear)
     # /.autoresearch_repo/train.py:74
@@ -1614,7 +1574,6 @@ def forward(
     # /.autoresearch_repo/train.py:81
     # gate = 2 * torch.sigmoid(self.ve_gate(x[..., :self.ve_gate_channels]))
     h7_attn_sigmoid: 'bfloat16[32, 2048, 4]' = aten.sigmoid(h7_attn_ve_gate__unsafe_view)  # strides=(8192, 4, 1), contiguous=True, view=False
-    h7_attn_detach: 'bfloat16[32, 2048, 4]' = aten.detach(h7_attn_sigmoid)  # strides=(8192, 4, 1), contiguous=True, view=True
     h7_attn_mul: 'bfloat16[32, 2048, 4]' = aten.mul.Tensor(h7_attn_sigmoid, 2)  # strides=(8192, 4, 1), contiguous=True, view=False
     h7_attn_unsqueeze: 'bfloat16[32, 2048, 4, 1]' = aten.unsqueeze(h7_attn_mul, -1)  # strides=(8192, 4, 1, 1), contiguous=True, view=True
     h7_attn_mul_1: 'bfloat16[32, 2048, 4, 128]' = aten.mul.Tensor(h7_attn_unsqueeze, h7_attn_view_3)  # strides=(1048576, 512, 128, 1), contiguous=True, view=False
@@ -1626,11 +1585,9 @@ def forward(
     h7_attn__fused_rms_norm = aten._fused_rms_norm(h7_attn_cat, [128], None, None)  # out0: strides=(1048576, 512, 128, 1), contiguous=True; out1: strides=(8192, 4, 1, 1), contiguous=True, view=False
     h7_attn_getitem: 'bfloat16[32, 2048, 4, 128]' = operator.getitem(h7_attn__fused_rms_norm, 0)  # strides=(1048576, 512, 128, 1), contiguous=True, view=True
     h7_attn_getitem_1: 'float32[32, 2048, 4, 1]' = operator.getitem(h7_attn__fused_rms_norm, 1)  # strides=(8192, 4, 1, 1), contiguous=True, view=True
-    h7_attn_detach_1: 'float32[32, 2048, 4, 1]' = aten.detach(h7_attn_getitem_1)  # strides=(8192, 4, 1, 1), contiguous=True, view=True
     h7_attn__fused_rms_norm_1 = aten._fused_rms_norm(h7_attn_cat_1, [128], None, None)  # out0: strides=(1048576, 512, 128, 1), contiguous=True; out1: strides=(8192, 4, 1, 1), contiguous=True, view=False
     h7_attn_getitem_2: 'bfloat16[32, 2048, 4, 128]' = operator.getitem(h7_attn__fused_rms_norm_1, 0)  # strides=(1048576, 512, 128, 1), contiguous=True, view=True
     h7_attn_getitem_3: 'float32[32, 2048, 4, 1]' = operator.getitem(h7_attn__fused_rms_norm_1, 1)  # strides=(8192, 4, 1, 1), contiguous=True, view=True
-    h7_attn_detach_2: 'float32[32, 2048, 4, 1]' = aten.detach(h7_attn_getitem_3)  # strides=(8192, 4, 1, 1), contiguous=True, view=True
     h7_attn_transpose: 'bfloat16[32, 4, 2048, 128]' = aten.transpose.int(h7_attn_getitem, 1, 2)  # strides=(1048576, 128, 512, 1), contiguous=False, view=True
     h7_attn_transpose_1: 'bfloat16[32, 4, 2048, 128]' = aten.transpose.int(h7_attn_getitem_2, 1, 2)  # strides=(1048576, 128, 512, 1), contiguous=False, view=True
     h7_attn_transpose_2: 'bfloat16[32, 4, 2048, 128]' = aten.transpose.int(h7_attn_add, 1, 2)  # strides=(1048576, 128, 512, 1), contiguous=False, view=True
@@ -1639,7 +1596,6 @@ def forward(
     h7_attn_getitem_5: 'float32[32, 4, 2048, 1]' = operator.getitem(h7_attn__scaled_dot_product_cudnn_attention, 1)  # strides=(8192, 2048, 1, 1), contiguous=True, view=True
     h7_attn_getitem_6: 'int64[]' = operator.getitem(h7_attn__scaled_dot_product_cudnn_attention, 6)  # strides=(), contiguous=True, view=True
     h7_attn_getitem_7: 'int64[]' = operator.getitem(h7_attn__scaled_dot_product_cudnn_attention, 7)  # strides=(), contiguous=True, view=True
-    h7_attn_detach_3: 'bfloat16[32, 4, 2048, 128]' = aten.detach(h7_attn_getitem_4)  # strides=(1048576, 128, 512, 1), contiguous=False, view=True
     h7_attn_transpose_3: 'bfloat16[32, 2048, 4, 128]' = aten.transpose.int(h7_attn_getitem_4, 1, 2)  # strides=(1048576, 512, 128, 1), contiguous=True, view=True
     h7_attn_view_4: 'bfloat16[32, 2048, 512]' = aten.view(h7_attn_transpose_3, [32, 2048, -1])  # strides=(1048576, 512, 1), contiguous=True, view=True
 
@@ -1658,7 +1614,6 @@ def forward(
     h7_add, h7__fused_rms_norm_1 = torch_add_rmsnorm(add_58_add, h7_attn_c_proj__unsafe_view, [512])
     h7_getitem_2 = operator.getitem(h7__fused_rms_norm_1, 0)
     h7_getitem_3 = operator.getitem(h7__fused_rms_norm_1, 1)
-    h7_detach_1: 'float32[32, 2048, 1]' = aten.detach(h7_getitem_3)  # strides=(2048, 1, 1), contiguous=True, view=True
 
     # self.transformer.h.7.mlp.c_fc (Linear)
     # /.autoresearch_repo/train.py:101
@@ -1696,7 +1651,6 @@ def forward(
     rms_norm_33__fused_rms_norm = aten._fused_rms_norm(h7_add_1, [512], None, None)  # out0: strides=(1048576, 512, 1), contiguous=True; out1: strides=(2048, 1, 1), contiguous=True, view=False
     rms_norm_33_getitem: 'bfloat16[32, 2048, 512]' = operator.getitem(rms_norm_33__fused_rms_norm, 0)  # strides=(1048576, 512, 1), contiguous=True, view=True
     rms_norm_33_getitem_1: 'float32[32, 2048, 1]' = operator.getitem(rms_norm_33__fused_rms_norm, 1)  # strides=(2048, 1, 1), contiguous=True, view=True
-    rms_norm_33_detach: 'float32[32, 2048, 1]' = aten.detach(rms_norm_33_getitem_1)  # strides=(2048, 1, 1), contiguous=True, view=True
 
     # ════════════════════════════════════════════════════════════════
     # self.lm_head
@@ -1720,11 +1674,10 @@ def forward(
     view_36_view: 'float32[65536, 8192]' = aten.view(mul_88_mul, [-1, 8192])  # strides=(8192, 1), contiguous=True, view=True
     view_37_view: 'int64[65536]' = aten.view(input__32__2048_1, [-1])  # strides=(1,), contiguous=True, view=True
     cross_entropy__log_softmax: 'float32[65536, 8192]' = aten._log_softmax(view_36_view, 1, False)  # strides=(8192, 1), contiguous=True, view=False
-    cross_entropy_detach: 'float32[65536, 8192]' = aten.detach(cross_entropy__log_softmax)  # strides=(8192, 1), contiguous=True, view=True
     cross_entropy_nll_loss_forward = aten.nll_loss_forward(cross_entropy__log_softmax, view_37_view, None, 1, -1)  # out0: strides=(), contiguous=True; out1: strides=(), contiguous=True, view=False
     cross_entropy_getitem: 'float32[]' = operator.getitem(cross_entropy_nll_loss_forward, 0)  # strides=(), contiguous=True, view=True
     cross_entropy_getitem_1: 'float32[]' = operator.getitem(cross_entropy_nll_loss_forward, 1)  # strides=(), contiguous=True, view=True
-    return (cross_entropy_getitem, input__32__2048, getitem_slice, getitem_1_slice, wte_embedding, rms_norm_getitem, rms_norm_detach, getitem_2_select, getitem_3_select, add_add, h0_detach, h0_attn_c_q_t, h0_attn_c_q_view, h0_attn_c_k_t, h0_attn_c_k_view, h0_attn_c_v_t, h0_attn_c_v_view, h0_attn_neg, h0_attn_cat, h0_attn_neg_1, h0_attn_cat_1, h0_attn_detach, h0_attn_detach_1, h0_attn_transpose, h0_attn_transpose_1, h0_attn_transpose_2, h0_attn_where, h0_attn_getitem_5, h0_attn_getitem_6, h0_attn_getitem_7, h0_attn_detach_2, h0_attn_c_proj_t, h0_attn_c_proj_view, h0_add, h0_detach_1, h0_mlp_c_fc_t, h0_mlp_c_fc_view, h0_mlp_detach, h0_mlp__to_copy, h0_mlp_c_proj_t, h0_mlp_c_proj_view, h0_add_1, getitem_8_select, getitem_9_select, add_8_add, h1_detach, h1_attn_c_q_t, h1_attn_c_q_view, h1_attn_c_k_t, h1_attn_c_k_view, h1_attn_c_v_t, h1_attn_c_v_view, h1_attn_view_3, h1_attn_ve_gate_t, h1_attn_ve_gate_view, h1_attn_detach, h1_attn_unsqueeze, h1_attn_neg, h1_attn_cat, h1_attn_neg_1, h1_attn_cat_1, h1_attn_detach_1, h1_attn_detach_2, h1_attn_transpose, h1_attn_transpose_1, h1_attn_transpose_2, h1_attn_where, h1_attn_getitem_5, h1_attn_getitem_6, h1_attn_getitem_7, h1_attn_detach_3, h1_attn_c_proj_t, h1_attn_c_proj_view, h1_add, h1_detach_1, h1_mlp_c_fc_t, h1_mlp_c_fc_view, h1_mlp_detach, h1_mlp__to_copy, h1_mlp_c_proj_t, h1_mlp_c_proj_view, h1_add_1, getitem_15_select, getitem_16_select, add_17_add, h2_detach, h2_attn_c_q_t, h2_attn_c_q_view, h2_attn_c_k_t, h2_attn_c_k_view, h2_attn_c_v_t, h2_attn_c_v_view, h2_attn_neg, h2_attn_cat, h2_attn_neg_1, h2_attn_cat_1, h2_attn_detach, h2_attn_detach_1, h2_attn_transpose, h2_attn_transpose_1, h2_attn_transpose_2, h2_attn_where, h2_attn_getitem_5, h2_attn_getitem_6, h2_attn_getitem_7, h2_attn_detach_2, h2_attn_c_proj_t, h2_attn_c_proj_view, h2_add, h2_detach_1, h2_mlp_c_fc_t, h2_mlp_c_fc_view, h2_mlp_detach, h2_mlp__to_copy, h2_mlp_c_proj_t, h2_mlp_c_proj_view, h2_add_1, getitem_21_select, getitem_22_select, add_25_add, h3_detach, h3_attn_c_q_t, h3_attn_c_q_view, h3_attn_c_k_t, h3_attn_c_k_view, h3_attn_c_v_t, h3_attn_c_v_view, h3_attn_view_3, h3_attn_ve_gate_t, h3_attn_ve_gate_view, h3_attn_detach, h3_attn_unsqueeze, h3_attn_neg, h3_attn_cat, h3_attn_neg_1, h3_attn_cat_1, h3_attn_detach_1, h3_attn_detach_2, h3_attn_transpose, h3_attn_transpose_1, h3_attn_transpose_2, h3_attn_getitem_5, h3_attn_getitem_6, h3_attn_getitem_7, h3_attn_detach_3, h3_attn_c_proj_t, h3_attn_c_proj_view, h3_add, h3_detach_1, h3_mlp_c_fc_t, h3_mlp_c_fc_view, h3_mlp_detach, h3_mlp__to_copy, h3_mlp_c_proj_t, h3_mlp_c_proj_view, h3_add_1, getitem_28_select, getitem_29_select, add_33_add, h4_detach, h4_attn_c_q_t, h4_attn_c_q_view, h4_attn_c_k_t, h4_attn_c_k_view, h4_attn_c_v_t, h4_attn_c_v_view, h4_attn_neg, h4_attn_cat, h4_attn_neg_1, h4_attn_cat_1, h4_attn_detach, h4_attn_detach_1, h4_attn_transpose, h4_attn_transpose_1, h4_attn_transpose_2, h4_attn_where, h4_attn_getitem_5, h4_attn_getitem_6, h4_attn_getitem_7, h4_attn_detach_2, h4_attn_c_proj_t, h4_attn_c_proj_view, h4_add, h4_detach_1, h4_mlp_c_fc_t, h4_mlp_c_fc_view, h4_mlp_detach, h4_mlp__to_copy, h4_mlp_c_proj_t, h4_mlp_c_proj_view, h4_add_1, getitem_34_select, getitem_35_select, add_41_add, h5_detach, h5_attn_c_q_t, h5_attn_c_q_view, h5_attn_c_k_t, h5_attn_c_k_view, h5_attn_c_v_t, h5_attn_c_v_view, h5_attn_view_3, h5_attn_ve_gate_t, h5_attn_ve_gate_view, h5_attn_detach, h5_attn_unsqueeze, h5_attn_neg, h5_attn_cat, h5_attn_neg_1, h5_attn_cat_1, h5_attn_detach_1, h5_attn_detach_2, h5_attn_transpose, h5_attn_transpose_1, h5_attn_transpose_2, h5_attn_where, h5_attn_getitem_5, h5_attn_getitem_6, h5_attn_getitem_7, h5_attn_detach_3, h5_attn_c_proj_t, h5_attn_c_proj_view, h5_add, h5_detach_1, h5_mlp_c_fc_t, h5_mlp_c_fc_view, h5_mlp_detach, h5_mlp__to_copy, h5_mlp_c_proj_t, h5_mlp_c_proj_view, h5_add_1, getitem_41_select, getitem_42_select, add_50_add, h6_detach, h6_attn_c_q_t, h6_attn_c_q_view, h6_attn_c_k_t, h6_attn_c_k_view, h6_attn_c_v_t, h6_attn_c_v_view, h6_attn_neg, h6_attn_cat, h6_attn_neg_1, h6_attn_cat_1, h6_attn_detach, h6_attn_detach_1, h6_attn_transpose, h6_attn_transpose_1, h6_attn_transpose_2, h6_attn_where, h6_attn_getitem_5, h6_attn_getitem_6, h6_attn_getitem_7, h6_attn_detach_2, h6_attn_c_proj_t, h6_attn_c_proj_view, h6_add, h6_detach_1, h6_mlp_c_fc_t, h6_mlp_c_fc_view, h6_mlp_detach, h6_mlp__to_copy, h6_mlp_c_proj_t, h6_mlp_c_proj_view, h6_add_1, getitem_47_select, getitem_48_select, add_58_add, h7_detach, h7_attn_c_q_t, h7_attn_c_q_view, h7_attn_c_k_t, h7_attn_c_k_view, h7_attn_c_v_t, h7_attn_c_v_view, h7_attn_view_3, h7_attn_ve_gate_t, h7_attn_ve_gate_view, h7_attn_detach, h7_attn_unsqueeze, h7_attn_neg, h7_attn_cat, h7_attn_neg_1, h7_attn_cat_1, h7_attn_detach_1, h7_attn_detach_2, h7_attn_transpose, h7_attn_transpose_1, h7_attn_transpose_2, h7_attn_getitem_5, h7_attn_getitem_6, h7_attn_getitem_7, h7_attn_detach_3, h7_attn_c_proj_t, h7_attn_c_proj_view, h7_add, h7_detach_1, h7_mlp_c_fc_t, h7_mlp_c_fc_view, h7_mlp_detach, h7_mlp__to_copy, h7_mlp_c_proj_t, h7_mlp_c_proj_view, h7_add_1, rms_norm_33_detach, lm_head_t, lm_head_view, tanh_detach, view_37_view, cross_entropy__log_softmax, cross_entropy_detach, cross_entropy_getitem_1,)
+    return (cross_entropy_getitem, input__32__2048, getitem_slice, getitem_1_slice, wte_embedding, rms_norm_getitem, rms_norm_getitem_1, getitem_2_select, getitem_3_select, add_add, h0_getitem_1, h0_attn_c_q_t, h0_attn_c_q_view, h0_attn_c_k_t, h0_attn_c_k_view, h0_attn_c_v_t, h0_attn_c_v_view, h0_attn_neg, h0_attn_cat, h0_attn_neg_1, h0_attn_cat_1, h0_attn_getitem_1, h0_attn_getitem_3, h0_attn_transpose, h0_attn_transpose_1, h0_attn_transpose_2, h0_attn_where, h0_attn_getitem_5, h0_attn_getitem_6, h0_attn_getitem_7, h0_attn_getitem_4, h0_attn_c_proj_t, h0_attn_c_proj_view, h0_add, h0_getitem_3, h0_mlp_c_fc_t, h0_mlp_c_fc_view, h0_mlp_detach, h0_mlp__to_copy, h0_mlp_c_proj_t, h0_mlp_c_proj_view, h0_add_1, getitem_8_select, getitem_9_select, add_8_add, h1_getitem_1, h1_attn_c_q_t, h1_attn_c_q_view, h1_attn_c_k_t, h1_attn_c_k_view, h1_attn_c_v_t, h1_attn_c_v_view, h1_attn_view_3, h1_attn_ve_gate_t, h1_attn_ve_gate_view, h1_attn_sigmoid, h1_attn_unsqueeze, h1_attn_neg, h1_attn_cat, h1_attn_neg_1, h1_attn_cat_1, h1_attn_getitem_1, h1_attn_getitem_3, h1_attn_transpose, h1_attn_transpose_1, h1_attn_transpose_2, h1_attn_where, h1_attn_getitem_5, h1_attn_getitem_6, h1_attn_getitem_7, h1_attn_getitem_4, h1_attn_c_proj_t, h1_attn_c_proj_view, h1_add, h1_getitem_3, h1_mlp_c_fc_t, h1_mlp_c_fc_view, h1_mlp_detach, h1_mlp__to_copy, h1_mlp_c_proj_t, h1_mlp_c_proj_view, h1_add_1, getitem_15_select, getitem_16_select, add_17_add, h2_getitem_1, h2_attn_c_q_t, h2_attn_c_q_view, h2_attn_c_k_t, h2_attn_c_k_view, h2_attn_c_v_t, h2_attn_c_v_view, h2_attn_neg, h2_attn_cat, h2_attn_neg_1, h2_attn_cat_1, h2_attn_getitem_1, h2_attn_getitem_3, h2_attn_transpose, h2_attn_transpose_1, h2_attn_transpose_2, h2_attn_where, h2_attn_getitem_5, h2_attn_getitem_6, h2_attn_getitem_7, h2_attn_getitem_4, h2_attn_c_proj_t, h2_attn_c_proj_view, h2_add, h2_getitem_3, h2_mlp_c_fc_t, h2_mlp_c_fc_view, h2_mlp_detach, h2_mlp__to_copy, h2_mlp_c_proj_t, h2_mlp_c_proj_view, h2_add_1, getitem_21_select, getitem_22_select, add_25_add, h3_getitem_1, h3_attn_c_q_t, h3_attn_c_q_view, h3_attn_c_k_t, h3_attn_c_k_view, h3_attn_c_v_t, h3_attn_c_v_view, h3_attn_view_3, h3_attn_ve_gate_t, h3_attn_ve_gate_view, h3_attn_sigmoid, h3_attn_unsqueeze, h3_attn_neg, h3_attn_cat, h3_attn_neg_1, h3_attn_cat_1, h3_attn_getitem_1, h3_attn_getitem_3, h3_attn_transpose, h3_attn_transpose_1, h3_attn_transpose_2, h3_attn_getitem_5, h3_attn_getitem_6, h3_attn_getitem_7, h3_attn_getitem_4, h3_attn_c_proj_t, h3_attn_c_proj_view, h3_add, h3_getitem_3, h3_mlp_c_fc_t, h3_mlp_c_fc_view, h3_mlp_detach, h3_mlp__to_copy, h3_mlp_c_proj_t, h3_mlp_c_proj_view, h3_add_1, getitem_28_select, getitem_29_select, add_33_add, h4_getitem_1, h4_attn_c_q_t, h4_attn_c_q_view, h4_attn_c_k_t, h4_attn_c_k_view, h4_attn_c_v_t, h4_attn_c_v_view, h4_attn_neg, h4_attn_cat, h4_attn_neg_1, h4_attn_cat_1, h4_attn_getitem_1, h4_attn_getitem_3, h4_attn_transpose, h4_attn_transpose_1, h4_attn_transpose_2, h4_attn_where, h4_attn_getitem_5, h4_attn_getitem_6, h4_attn_getitem_7, h4_attn_getitem_4, h4_attn_c_proj_t, h4_attn_c_proj_view, h4_add, h4_getitem_3, h4_mlp_c_fc_t, h4_mlp_c_fc_view, h4_mlp_detach, h4_mlp__to_copy, h4_mlp_c_proj_t, h4_mlp_c_proj_view, h4_add_1, getitem_34_select, getitem_35_select, add_41_add, h5_getitem_1, h5_attn_c_q_t, h5_attn_c_q_view, h5_attn_c_k_t, h5_attn_c_k_view, h5_attn_c_v_t, h5_attn_c_v_view, h5_attn_view_3, h5_attn_ve_gate_t, h5_attn_ve_gate_view, h5_attn_sigmoid, h5_attn_unsqueeze, h5_attn_neg, h5_attn_cat, h5_attn_neg_1, h5_attn_cat_1, h5_attn_getitem_1, h5_attn_getitem_3, h5_attn_transpose, h5_attn_transpose_1, h5_attn_transpose_2, h5_attn_where, h5_attn_getitem_5, h5_attn_getitem_6, h5_attn_getitem_7, h5_attn_getitem_4, h5_attn_c_proj_t, h5_attn_c_proj_view, h5_add, h5_getitem_3, h5_mlp_c_fc_t, h5_mlp_c_fc_view, h5_mlp_detach, h5_mlp__to_copy, h5_mlp_c_proj_t, h5_mlp_c_proj_view, h5_add_1, getitem_41_select, getitem_42_select, add_50_add, h6_getitem_1, h6_attn_c_q_t, h6_attn_c_q_view, h6_attn_c_k_t, h6_attn_c_k_view, h6_attn_c_v_t, h6_attn_c_v_view, h6_attn_neg, h6_attn_cat, h6_attn_neg_1, h6_attn_cat_1, h6_attn_getitem_1, h6_attn_getitem_3, h6_attn_transpose, h6_attn_transpose_1, h6_attn_transpose_2, h6_attn_where, h6_attn_getitem_5, h6_attn_getitem_6, h6_attn_getitem_7, h6_attn_getitem_4, h6_attn_c_proj_t, h6_attn_c_proj_view, h6_add, h6_getitem_3, h6_mlp_c_fc_t, h6_mlp_c_fc_view, h6_mlp_detach, h6_mlp__to_copy, h6_mlp_c_proj_t, h6_mlp_c_proj_view, h6_add_1, getitem_47_select, getitem_48_select, add_58_add, h7_getitem_1, h7_attn_c_q_t, h7_attn_c_q_view, h7_attn_c_k_t, h7_attn_c_k_view, h7_attn_c_v_t, h7_attn_c_v_view, h7_attn_view_3, h7_attn_ve_gate_t, h7_attn_ve_gate_view, h7_attn_sigmoid, h7_attn_unsqueeze, h7_attn_neg, h7_attn_cat, h7_attn_neg_1, h7_attn_cat_1, h7_attn_getitem_1, h7_attn_getitem_3, h7_attn_transpose, h7_attn_transpose_1, h7_attn_transpose_2, h7_attn_getitem_5, h7_attn_getitem_6, h7_attn_getitem_7, h7_attn_getitem_4, h7_attn_c_proj_t, h7_attn_c_proj_view, h7_add, h7_getitem_3, h7_mlp_c_fc_t, h7_mlp_c_fc_view, h7_mlp_detach, h7_mlp__to_copy, h7_mlp_c_proj_t, h7_mlp_c_proj_view, h7_add_1, rms_norm_33_getitem_1, lm_head_t, lm_head_view, tanh_detach, view_37_view, cross_entropy__log_softmax, cross_entropy__log_softmax, cross_entropy_getitem_1,)
 
 
 # ======================================================================
@@ -2060,8 +2013,7 @@ def backward(
     # /.autoresearch_repo/train.py:283
     # loss = F.cross_entropy(logits.view(-1, logits.size(-1)), targets.view(-1),
     grad_cross_entropy_nll_loss_backward: 'float32[65536, 8192]' = aten.nll_loss_backward(tangents_1, _log_softmax, view_90, None, 1, -1, getitem_141)  # strides=(8192, 1), contiguous=True, view=False
-    grad_cross_entropy_detach: 'float32[65536, 8192]' = aten.detach(detach_55)  # strides=(8192, 1), contiguous=True, view=True
-    grad_cross_entropy__log_softmax_backward_data: 'float32[65536, 8192]' = aten._log_softmax_backward_data(grad_cross_entropy_nll_loss_backward, grad_cross_entropy_detach, 1, torch.float32)  # strides=(8192, 1), contiguous=True, view=False
+    grad_cross_entropy__log_softmax_backward_data: 'float32[65536, 8192]' = aten._log_softmax_backward_data(grad_cross_entropy_nll_loss_backward, detach_55, 1, torch.float32)  # strides=(8192, 1), contiguous=True, view=False
     grad_view_36_view: 'float32[32, 2048, 8192]' = aten.view(grad_cross_entropy__log_softmax_backward_data, [32, 2048, 8192])  # strides=(16777216, 8192, 1), contiguous=True, view=True
 
     # /.autoresearch_repo/train.py:280
@@ -2087,8 +2039,7 @@ def backward(
 
     # /.venv/lib/python3.12/site-packages/torch/nn/functional.py:2954
     # return torch.rms_norm(input, normalized_shape, weight, eps)
-    grad_rms_norm_33_detach: 'float32[32, 2048, 1]' = aten.detach(detach_53)  # strides=(2048, 1, 1), contiguous=True, view=True
-    grad_rms_norm_33__fused_rms_norm_backward = aten._fused_rms_norm_backward(grad_lm_head_view_1, add_65, [512], grad_rms_norm_33_detach, None, [True, False])  # out0: strides=(1048576, 512, 1), contiguous=True, view=False
+    grad_rms_norm_33__fused_rms_norm_backward = aten._fused_rms_norm_backward(grad_lm_head_view_1, add_65, [512], detach_53, None, [True, False])  # out0: strides=(1048576, 512, 1), contiguous=True, view=False
     grad_rms_norm_33_getitem: 'bfloat16[32, 2048, 512]' = operator.getitem(grad_rms_norm_33__fused_rms_norm_backward, 0)  # strides=(1048576, 512, 1), contiguous=True, view=True
 
     # ════════════════════════════════════════════════════════════════
@@ -2129,8 +2080,7 @@ def backward(
     # grad of self.transformer.h.7 (Block) → d_loss/d_7
     # /.venv/lib/python3.12/site-packages/torch/nn/functional.py:2954
     # return torch.rms_norm(input, normalized_shape, weight, eps)
-    grad_h7_detach: 'float32[32, 2048, 1]' = aten.detach(detach_51)  # strides=(2048, 1, 1), contiguous=True, view=True
-    grad_h7__fused_rms_norm_backward = aten._fused_rms_norm_backward(grad_h7_mlp_c_fc_view_1, add_64, [512], grad_h7_detach, None, [True, False])  # out0: strides=(1048576, 512, 1), contiguous=True, view=False
+    grad_h7__fused_rms_norm_backward = aten._fused_rms_norm_backward(grad_h7_mlp_c_fc_view_1, add_64, [512], detach_51, None, [True, False])  # out0: strides=(1048576, 512, 1), contiguous=True, view=False
     grad_h7_getitem: 'bfloat16[32, 2048, 512]' = operator.getitem(grad_h7__fused_rms_norm_backward, 0)  # strides=(1048576, 512, 1), contiguous=True, view=True
     add_66: 'bfloat16[32, 2048, 512]' = aten.add.Tensor(grad_rms_norm_33_getitem, grad_h7_getitem)  # strides=(1048576, 512, 1), contiguous=True, view=False
 
@@ -2152,19 +2102,16 @@ def backward(
     # y = y.contiguous().view(B, T, -1)
     grad_h7_attn_view: 'bfloat16[32, 2048, 4, 128]' = aten.view(grad_h7_attn_c_proj_view_1, [32, 2048, 4, 128])  # strides=(1048576, 512, 128, 1), contiguous=True, view=True
     grad_h7_attn_transpose: 'bfloat16[32, 4, 2048, 128]' = aten.transpose.int(grad_h7_attn_view, 1, 2)  # strides=(1048576, 128, 512, 1), contiguous=False, view=True
-    grad_h7_attn_detach: 'bfloat16[32, 4, 2048, 128]' = aten.detach(detach_50)  # strides=(1048576, 128, 512, 1), contiguous=False, view=True
-    grad_h7_attn__scaled_dot_product_cudnn_attention_backward = aten._scaled_dot_product_cudnn_attention_backward(grad_h7_attn_transpose, transpose_28, transpose_29, transpose_30, grad_h7_attn_detach, getitem_128, getitem_133, getitem_134, None, None, None, 2048, 2048, 0.0, True)  # out0: strides=(1048576, 128, 512, 1), contiguous=False; out1: strides=(1048576, 128, 512, 1), contiguous=False; out2: strides=(1048576, 128, 512, 1), contiguous=False, view=False
+    grad_h7_attn__scaled_dot_product_cudnn_attention_backward = aten._scaled_dot_product_cudnn_attention_backward(grad_h7_attn_transpose, transpose_28, transpose_29, transpose_30, detach_50, getitem_128, getitem_133, getitem_134, None, None, None, 2048, 2048, 0.0, True)  # out0: strides=(1048576, 128, 512, 1), contiguous=False; out1: strides=(1048576, 128, 512, 1), contiguous=False; out2: strides=(1048576, 128, 512, 1), contiguous=False, view=False
     grad_h7_attn_getitem: 'bfloat16[32, 4, 2048, 128]' = operator.getitem(grad_h7_attn__scaled_dot_product_cudnn_attention_backward, 0)  # strides=(1048576, 128, 512, 1), contiguous=False, view=True
     grad_h7_attn_getitem_1: 'bfloat16[32, 4, 2048, 128]' = operator.getitem(grad_h7_attn__scaled_dot_product_cudnn_attention_backward, 1)  # strides=(1048576, 128, 512, 1), contiguous=False, view=True
     grad_h7_attn_getitem_2: 'bfloat16[32, 4, 2048, 128]' = operator.getitem(grad_h7_attn__scaled_dot_product_cudnn_attention_backward, 2)  # strides=(1048576, 128, 512, 1), contiguous=False, view=True
     grad_h7_attn_transpose_1: 'bfloat16[32, 2048, 4, 128]' = aten.transpose.int(grad_h7_attn_getitem_2, 1, 2)  # strides=(1048576, 512, 128, 1), contiguous=True, view=True
     grad_h7_attn_transpose_2: 'bfloat16[32, 2048, 4, 128]' = aten.transpose.int(grad_h7_attn_getitem_1, 1, 2)  # strides=(1048576, 512, 128, 1), contiguous=True, view=True
     grad_h7_attn_transpose_3: 'bfloat16[32, 2048, 4, 128]' = aten.transpose.int(grad_h7_attn_getitem, 1, 2)  # strides=(1048576, 512, 128, 1), contiguous=True, view=True
-    grad_h7_attn_detach_1: 'float32[32, 2048, 4, 1]' = aten.detach(detach_49)  # strides=(8192, 4, 1, 1), contiguous=True, view=True
-    grad_h7_attn__fused_rms_norm_backward = aten._fused_rms_norm_backward(grad_h7_attn_transpose_2, cat_15, [128], grad_h7_attn_detach_1, None, [True, False])  # out0: strides=(1048576, 512, 128, 1), contiguous=True, view=False
+    grad_h7_attn__fused_rms_norm_backward = aten._fused_rms_norm_backward(grad_h7_attn_transpose_2, cat_15, [128], detach_49, None, [True, False])  # out0: strides=(1048576, 512, 128, 1), contiguous=True, view=False
     grad_h7_attn_getitem_3: 'bfloat16[32, 2048, 4, 128]' = operator.getitem(grad_h7_attn__fused_rms_norm_backward, 0)  # strides=(1048576, 512, 128, 1), contiguous=True, view=True
-    grad_h7_attn_detach_2: 'float32[32, 2048, 4, 1]' = aten.detach(detach_48)  # strides=(8192, 4, 1, 1), contiguous=True, view=True
-    grad_h7_attn__fused_rms_norm_backward_1 = aten._fused_rms_norm_backward(grad_h7_attn_transpose_3, cat_14, [128], grad_h7_attn_detach_2, None, [True, False])  # out0: strides=(1048576, 512, 128, 1), contiguous=True, view=False
+    grad_h7_attn__fused_rms_norm_backward_1 = aten._fused_rms_norm_backward(grad_h7_attn_transpose_3, cat_14, [128], detach_48, None, [True, False])  # out0: strides=(1048576, 512, 128, 1), contiguous=True, view=False
     grad_h7_attn_getitem_4: 'bfloat16[32, 2048, 4, 128]' = operator.getitem(grad_h7_attn__fused_rms_norm_backward_1, 0)  # strides=(1048576, 512, 128, 1), contiguous=True, view=True
     add_69 = torch_rope_fwd(grad_h7_attn_getitem_3, slice_1, neg_15)  # FUSED: backward RoPE (11 ops -> 4 kernels)
     add_72 = torch_rope_fwd(grad_h7_attn_getitem_4, slice_1, neg_14)  # FUSED: backward RoPE (11 ops -> 4 kernels)
@@ -2174,8 +2121,7 @@ def backward(
     grad_h7_attn__to_copy: 'bfloat16[32, 2048, 4, 1]' = aten._to_copy(grad_h7_attn_sum, dtype=torch.bfloat16)  # strides=(8192, 4, 1, 1), contiguous=True, view=False
     grad_h7_attn_squeeze: 'bfloat16[32, 2048, 4]' = aten.squeeze.dim(grad_h7_attn__to_copy, -1)  # strides=(8192, 4, 1), contiguous=True, view=True
     grad_h7_attn_mul_10: 'bfloat16[32, 2048, 4]' = aten.mul.Tensor(grad_h7_attn_squeeze, 2)  # strides=(8192, 4, 1), contiguous=True, view=False
-    grad_h7_attn_detach_3: 'bfloat16[32, 2048, 4]' = aten.detach(detach_47)  # strides=(8192, 4, 1), contiguous=True, view=True
-    grad_h7_attn_sigmoid_backward: 'bfloat16[32, 2048, 4]' = aten.sigmoid_backward(grad_h7_attn_mul_10, grad_h7_attn_detach_3)  # strides=(8192, 4, 1), contiguous=True, view=False
+    grad_h7_attn_sigmoid_backward: 'bfloat16[32, 2048, 4]' = aten.sigmoid_backward(grad_h7_attn_mul_10, detach_47)  # strides=(8192, 4, 1), contiguous=True, view=False
 
     # grad of self.transformer.h.7.attn.ve_gate (Linear) → d_loss/d_ve_gate
     # /.autoresearch_repo/train.py:81
@@ -2254,8 +2200,7 @@ def backward(
     # grad of self.transformer.h.7 (Block) → d_loss/d_7
     # /.venv/lib/python3.12/site-packages/torch/nn/functional.py:2954
     # return torch.rms_norm(input, normalized_shape, weight, eps)
-    grad_h7_detach_1: 'float32[32, 2048, 1]' = aten.detach(detach_46)  # strides=(2048, 1, 1), contiguous=True, view=True
-    grad_h7__fused_rms_norm_backward_1 = aten._fused_rms_norm_backward(add_75, add_58, [512], grad_h7_detach_1, None, [True, False])  # out0: strides=(1048576, 512, 1), contiguous=True, view=False
+    grad_h7__fused_rms_norm_backward_1 = aten._fused_rms_norm_backward(add_75, add_58, [512], detach_46, None, [True, False])  # out0: strides=(1048576, 512, 1), contiguous=True, view=False
     grad_h7_getitem_1: 'bfloat16[32, 2048, 512]' = operator.getitem(grad_h7__fused_rms_norm_backward_1, 0)  # strides=(1048576, 512, 1), contiguous=True, view=True
     add_76: 'bfloat16[32, 2048, 512]' = aten.add.Tensor(add_66, grad_h7_getitem_1)  # strides=(1048576, 512, 1), contiguous=True, view=False
 
@@ -2317,8 +2262,7 @@ def backward(
     # grad of self.transformer.h.6 (Block) → d_loss/d_6
     # /.venv/lib/python3.12/site-packages/torch/nn/functional.py:2954
     # return torch.rms_norm(input, normalized_shape, weight, eps)
-    grad_h6_detach: 'float32[32, 2048, 1]' = aten.detach(detach_44)  # strides=(2048, 1, 1), contiguous=True, view=True
-    grad_h6__fused_rms_norm_backward = aten._fused_rms_norm_backward(grad_h6_mlp_c_fc_view_1, add_56, [512], grad_h6_detach, None, [True, False])  # out0: strides=(1048576, 512, 1), contiguous=True, view=False
+    grad_h6__fused_rms_norm_backward = aten._fused_rms_norm_backward(grad_h6_mlp_c_fc_view_1, add_56, [512], detach_44, None, [True, False])  # out0: strides=(1048576, 512, 1), contiguous=True, view=False
     grad_h6_getitem: 'bfloat16[32, 2048, 512]' = operator.getitem(grad_h6__fused_rms_norm_backward, 0)  # strides=(1048576, 512, 1), contiguous=True, view=True
     add_77: 'bfloat16[32, 2048, 512]' = aten.add.Tensor(grad_mul_76_mul, grad_h6_getitem)  # strides=(1048576, 512, 1), contiguous=True, view=False
 
@@ -2340,19 +2284,16 @@ def backward(
     # y = y.contiguous().view(B, T, -1)
     grad_h6_attn_view: 'bfloat16[32, 2048, 4, 128]' = aten.view(grad_h6_attn_c_proj_view_1, [32, 2048, 4, 128])  # strides=(1048576, 512, 128, 1), contiguous=True, view=True
     grad_h6_attn_transpose: 'bfloat16[32, 4, 2048, 128]' = aten.transpose.int(grad_h6_attn_view, 1, 2)  # strides=(1048576, 128, 512, 1), contiguous=False, view=True
-    grad_h6_attn_detach: 'bfloat16[32, 4, 2048, 128]' = aten.detach(detach_43)  # strides=(1048576, 128, 512, 1), contiguous=False, view=True
-    grad_h6_attn__scaled_dot_product_cudnn_attention_backward = aten._scaled_dot_product_cudnn_attention_backward(grad_h6_attn_transpose, transpose_24, transpose_25, transpose_26, grad_h6_attn_detach, getitem_111, getitem_116, getitem_117, where_5, None, None, 2048, 2048, 0.0, False)  # out0: strides=(1048576, 128, 512, 1), contiguous=False; out1: strides=(1048576, 128, 512, 1), contiguous=False; out2: strides=(1048576, 128, 512, 1), contiguous=False, view=False
+    grad_h6_attn__scaled_dot_product_cudnn_attention_backward = aten._scaled_dot_product_cudnn_attention_backward(grad_h6_attn_transpose, transpose_24, transpose_25, transpose_26, detach_43, getitem_111, getitem_116, getitem_117, where_5, None, None, 2048, 2048, 0.0, False)  # out0: strides=(1048576, 128, 512, 1), contiguous=False; out1: strides=(1048576, 128, 512, 1), contiguous=False; out2: strides=(1048576, 128, 512, 1), contiguous=False, view=False
     grad_h6_attn_getitem: 'bfloat16[32, 4, 2048, 128]' = operator.getitem(grad_h6_attn__scaled_dot_product_cudnn_attention_backward, 0)  # strides=(1048576, 128, 512, 1), contiguous=False, view=True
     grad_h6_attn_getitem_1: 'bfloat16[32, 4, 2048, 128]' = operator.getitem(grad_h6_attn__scaled_dot_product_cudnn_attention_backward, 1)  # strides=(1048576, 128, 512, 1), contiguous=False, view=True
     grad_h6_attn_getitem_2: 'bfloat16[32, 4, 2048, 128]' = operator.getitem(grad_h6_attn__scaled_dot_product_cudnn_attention_backward, 2)  # strides=(1048576, 128, 512, 1), contiguous=False, view=True
     grad_h6_attn_transpose_1: 'bfloat16[32, 2048, 4, 128]' = aten.transpose.int(grad_h6_attn_getitem_2, 1, 2)  # strides=(1048576, 512, 128, 1), contiguous=True, view=True
     grad_h6_attn_transpose_2: 'bfloat16[32, 2048, 4, 128]' = aten.transpose.int(grad_h6_attn_getitem_1, 1, 2)  # strides=(1048576, 512, 128, 1), contiguous=True, view=True
     grad_h6_attn_transpose_3: 'bfloat16[32, 2048, 4, 128]' = aten.transpose.int(grad_h6_attn_getitem, 1, 2)  # strides=(1048576, 512, 128, 1), contiguous=True, view=True
-    grad_h6_attn_detach_1: 'float32[32, 2048, 4, 1]' = aten.detach(detach_42)  # strides=(8192, 4, 1, 1), contiguous=True, view=True
-    grad_h6_attn__fused_rms_norm_backward = aten._fused_rms_norm_backward(grad_h6_attn_transpose_2, cat_13, [128], grad_h6_attn_detach_1, None, [True, False])  # out0: strides=(1048576, 512, 128, 1), contiguous=True, view=False
+    grad_h6_attn__fused_rms_norm_backward = aten._fused_rms_norm_backward(grad_h6_attn_transpose_2, cat_13, [128], detach_42, None, [True, False])  # out0: strides=(1048576, 512, 128, 1), contiguous=True, view=False
     grad_h6_attn_getitem_3: 'bfloat16[32, 2048, 4, 128]' = operator.getitem(grad_h6_attn__fused_rms_norm_backward, 0)  # strides=(1048576, 512, 128, 1), contiguous=True, view=True
-    grad_h6_attn_detach_2: 'float32[32, 2048, 4, 1]' = aten.detach(detach_41)  # strides=(8192, 4, 1, 1), contiguous=True, view=True
-    grad_h6_attn__fused_rms_norm_backward_1 = aten._fused_rms_norm_backward(grad_h6_attn_transpose_3, cat_12, [128], grad_h6_attn_detach_2, None, [True, False])  # out0: strides=(1048576, 512, 128, 1), contiguous=True, view=False
+    grad_h6_attn__fused_rms_norm_backward_1 = aten._fused_rms_norm_backward(grad_h6_attn_transpose_3, cat_12, [128], detach_41, None, [True, False])  # out0: strides=(1048576, 512, 128, 1), contiguous=True, view=False
     grad_h6_attn_getitem_4: 'bfloat16[32, 2048, 4, 128]' = operator.getitem(grad_h6_attn__fused_rms_norm_backward_1, 0)  # strides=(1048576, 512, 128, 1), contiguous=True, view=True
     add_80 = torch_rope_fwd(grad_h6_attn_getitem_3, slice_1, neg_13)  # FUSED: backward RoPE (11 ops -> 4 kernels)
     add_83 = torch_rope_fwd(grad_h6_attn_getitem_4, slice_1, neg_12)  # FUSED: backward RoPE (11 ops -> 4 kernels)
@@ -2413,8 +2354,7 @@ def backward(
     # grad of self.transformer.h.6 (Block) → d_loss/d_6
     # /.venv/lib/python3.12/site-packages/torch/nn/functional.py:2954
     # return torch.rms_norm(input, normalized_shape, weight, eps)
-    grad_h6_detach_1: 'float32[32, 2048, 1]' = aten.detach(detach_40)  # strides=(2048, 1, 1), contiguous=True, view=True
-    grad_h6__fused_rms_norm_backward_1 = aten._fused_rms_norm_backward(add_85, add_50, [512], grad_h6_detach_1, None, [True, False])  # out0: strides=(1048576, 512, 1), contiguous=True, view=False
+    grad_h6__fused_rms_norm_backward_1 = aten._fused_rms_norm_backward(add_85, add_50, [512], detach_40, None, [True, False])  # out0: strides=(1048576, 512, 1), contiguous=True, view=False
     grad_h6_getitem_1: 'bfloat16[32, 2048, 512]' = operator.getitem(grad_h6__fused_rms_norm_backward_1, 0)  # strides=(1048576, 512, 1), contiguous=True, view=True
     add_86: 'bfloat16[32, 2048, 512]' = aten.add.Tensor(add_77, grad_h6_getitem_1)  # strides=(1048576, 512, 1), contiguous=True, view=False
 
@@ -2470,8 +2410,7 @@ def backward(
     # grad of self.transformer.h.5 (Block) → d_loss/d_5
     # /.venv/lib/python3.12/site-packages/torch/nn/functional.py:2954
     # return torch.rms_norm(input, normalized_shape, weight, eps)
-    grad_h5_detach: 'float32[32, 2048, 1]' = aten.detach(detach_38)  # strides=(2048, 1, 1), contiguous=True, view=True
-    grad_h5__fused_rms_norm_backward = aten._fused_rms_norm_backward(grad_h5_mlp_c_fc_view_1, add_48, [512], grad_h5_detach, None, [True, False])  # out0: strides=(1048576, 512, 1), contiguous=True, view=False
+    grad_h5__fused_rms_norm_backward = aten._fused_rms_norm_backward(grad_h5_mlp_c_fc_view_1, add_48, [512], detach_38, None, [True, False])  # out0: strides=(1048576, 512, 1), contiguous=True, view=False
     grad_h5_getitem: 'bfloat16[32, 2048, 512]' = operator.getitem(grad_h5__fused_rms_norm_backward, 0)  # strides=(1048576, 512, 1), contiguous=True, view=True
     add_90: 'bfloat16[32, 2048, 512]' = aten.add.Tensor(grad_mul_66_mul, grad_h5_getitem)  # strides=(1048576, 512, 1), contiguous=True, view=False
 
@@ -2493,19 +2432,16 @@ def backward(
     # y = y.contiguous().view(B, T, -1)
     grad_h5_attn_view: 'bfloat16[32, 2048, 4, 128]' = aten.view(grad_h5_attn_c_proj_view_1, [32, 2048, 4, 128])  # strides=(1048576, 512, 128, 1), contiguous=True, view=True
     grad_h5_attn_transpose: 'bfloat16[32, 4, 2048, 128]' = aten.transpose.int(grad_h5_attn_view, 1, 2)  # strides=(1048576, 128, 512, 1), contiguous=False, view=True
-    grad_h5_attn_detach: 'bfloat16[32, 4, 2048, 128]' = aten.detach(detach_37)  # strides=(1048576, 128, 512, 1), contiguous=False, view=True
-    grad_h5_attn__scaled_dot_product_cudnn_attention_backward = aten._scaled_dot_product_cudnn_attention_backward(grad_h5_attn_transpose, transpose_20, transpose_21, transpose_22, grad_h5_attn_detach, getitem_94, getitem_99, getitem_100, where_4, None, None, 2048, 2048, 0.0, False)  # out0: strides=(1048576, 128, 512, 1), contiguous=False; out1: strides=(1048576, 128, 512, 1), contiguous=False; out2: strides=(1048576, 128, 512, 1), contiguous=False, view=False
+    grad_h5_attn__scaled_dot_product_cudnn_attention_backward = aten._scaled_dot_product_cudnn_attention_backward(grad_h5_attn_transpose, transpose_20, transpose_21, transpose_22, detach_37, getitem_94, getitem_99, getitem_100, where_4, None, None, 2048, 2048, 0.0, False)  # out0: strides=(1048576, 128, 512, 1), contiguous=False; out1: strides=(1048576, 128, 512, 1), contiguous=False; out2: strides=(1048576, 128, 512, 1), contiguous=False, view=False
     grad_h5_attn_getitem: 'bfloat16[32, 4, 2048, 128]' = operator.getitem(grad_h5_attn__scaled_dot_product_cudnn_attention_backward, 0)  # strides=(1048576, 128, 512, 1), contiguous=False, view=True
     grad_h5_attn_getitem_1: 'bfloat16[32, 4, 2048, 128]' = operator.getitem(grad_h5_attn__scaled_dot_product_cudnn_attention_backward, 1)  # strides=(1048576, 128, 512, 1), contiguous=False, view=True
     grad_h5_attn_getitem_2: 'bfloat16[32, 4, 2048, 128]' = operator.getitem(grad_h5_attn__scaled_dot_product_cudnn_attention_backward, 2)  # strides=(1048576, 128, 512, 1), contiguous=False, view=True
     grad_h5_attn_transpose_1: 'bfloat16[32, 2048, 4, 128]' = aten.transpose.int(grad_h5_attn_getitem_2, 1, 2)  # strides=(1048576, 512, 128, 1), contiguous=True, view=True
     grad_h5_attn_transpose_2: 'bfloat16[32, 2048, 4, 128]' = aten.transpose.int(grad_h5_attn_getitem_1, 1, 2)  # strides=(1048576, 512, 128, 1), contiguous=True, view=True
     grad_h5_attn_transpose_3: 'bfloat16[32, 2048, 4, 128]' = aten.transpose.int(grad_h5_attn_getitem, 1, 2)  # strides=(1048576, 512, 128, 1), contiguous=True, view=True
-    grad_h5_attn_detach_1: 'float32[32, 2048, 4, 1]' = aten.detach(detach_36)  # strides=(8192, 4, 1, 1), contiguous=True, view=True
-    grad_h5_attn__fused_rms_norm_backward = aten._fused_rms_norm_backward(grad_h5_attn_transpose_2, cat_11, [128], grad_h5_attn_detach_1, None, [True, False])  # out0: strides=(1048576, 512, 128, 1), contiguous=True, view=False
+    grad_h5_attn__fused_rms_norm_backward = aten._fused_rms_norm_backward(grad_h5_attn_transpose_2, cat_11, [128], detach_36, None, [True, False])  # out0: strides=(1048576, 512, 128, 1), contiguous=True, view=False
     grad_h5_attn_getitem_3: 'bfloat16[32, 2048, 4, 128]' = operator.getitem(grad_h5_attn__fused_rms_norm_backward, 0)  # strides=(1048576, 512, 128, 1), contiguous=True, view=True
-    grad_h5_attn_detach_2: 'float32[32, 2048, 4, 1]' = aten.detach(detach_35)  # strides=(8192, 4, 1, 1), contiguous=True, view=True
-    grad_h5_attn__fused_rms_norm_backward_1 = aten._fused_rms_norm_backward(grad_h5_attn_transpose_3, cat_10, [128], grad_h5_attn_detach_2, None, [True, False])  # out0: strides=(1048576, 512, 128, 1), contiguous=True, view=False
+    grad_h5_attn__fused_rms_norm_backward_1 = aten._fused_rms_norm_backward(grad_h5_attn_transpose_3, cat_10, [128], detach_35, None, [True, False])  # out0: strides=(1048576, 512, 128, 1), contiguous=True, view=False
     grad_h5_attn_getitem_4: 'bfloat16[32, 2048, 4, 128]' = operator.getitem(grad_h5_attn__fused_rms_norm_backward_1, 0)  # strides=(1048576, 512, 128, 1), contiguous=True, view=True
     add_93 = torch_rope_fwd(grad_h5_attn_getitem_3, slice_1, neg_11)  # FUSED: backward RoPE (11 ops -> 4 kernels)
     add_96 = torch_rope_fwd(grad_h5_attn_getitem_4, slice_1, neg_10)  # FUSED: backward RoPE (11 ops -> 4 kernels)
@@ -2515,8 +2451,7 @@ def backward(
     grad_h5_attn__to_copy: 'bfloat16[32, 2048, 4, 1]' = aten._to_copy(grad_h5_attn_sum, dtype=torch.bfloat16)  # strides=(8192, 4, 1, 1), contiguous=True, view=False
     grad_h5_attn_squeeze: 'bfloat16[32, 2048, 4]' = aten.squeeze.dim(grad_h5_attn__to_copy, -1)  # strides=(8192, 4, 1), contiguous=True, view=True
     grad_h5_attn_mul_10: 'bfloat16[32, 2048, 4]' = aten.mul.Tensor(grad_h5_attn_squeeze, 2)  # strides=(8192, 4, 1), contiguous=True, view=False
-    grad_h5_attn_detach_3: 'bfloat16[32, 2048, 4]' = aten.detach(detach_34)  # strides=(8192, 4, 1), contiguous=True, view=True
-    grad_h5_attn_sigmoid_backward: 'bfloat16[32, 2048, 4]' = aten.sigmoid_backward(grad_h5_attn_mul_10, grad_h5_attn_detach_3)  # strides=(8192, 4, 1), contiguous=True, view=False
+    grad_h5_attn_sigmoid_backward: 'bfloat16[32, 2048, 4]' = aten.sigmoid_backward(grad_h5_attn_mul_10, detach_34)  # strides=(8192, 4, 1), contiguous=True, view=False
 
     # grad of self.transformer.h.5.attn.ve_gate (Linear) → d_loss/d_ve_gate
     # /.autoresearch_repo/train.py:81
@@ -2595,8 +2530,7 @@ def backward(
     # grad of self.transformer.h.5 (Block) → d_loss/d_5
     # /.venv/lib/python3.12/site-packages/torch/nn/functional.py:2954
     # return torch.rms_norm(input, normalized_shape, weight, eps)
-    grad_h5_detach_1: 'float32[32, 2048, 1]' = aten.detach(detach_33)  # strides=(2048, 1, 1), contiguous=True, view=True
-    grad_h5__fused_rms_norm_backward_1 = aten._fused_rms_norm_backward(add_99, add_41, [512], grad_h5_detach_1, None, [True, False])  # out0: strides=(1048576, 512, 1), contiguous=True, view=False
+    grad_h5__fused_rms_norm_backward_1 = aten._fused_rms_norm_backward(add_99, add_41, [512], detach_33, None, [True, False])  # out0: strides=(1048576, 512, 1), contiguous=True, view=False
     grad_h5_getitem_1: 'bfloat16[32, 2048, 512]' = operator.getitem(grad_h5__fused_rms_norm_backward_1, 0)  # strides=(1048576, 512, 1), contiguous=True, view=True
     add_100: 'bfloat16[32, 2048, 512]' = aten.add.Tensor(add_90, grad_h5_getitem_1)  # strides=(1048576, 512, 1), contiguous=True, view=False
 
@@ -2664,8 +2598,7 @@ def backward(
     # grad of self.transformer.h.4 (Block) → d_loss/d_4
     # /.venv/lib/python3.12/site-packages/torch/nn/functional.py:2954
     # return torch.rms_norm(input, normalized_shape, weight, eps)
-    grad_h4_detach: 'float32[32, 2048, 1]' = aten.detach(detach_31)  # strides=(2048, 1, 1), contiguous=True, view=True
-    grad_h4__fused_rms_norm_backward = aten._fused_rms_norm_backward(grad_h4_mlp_c_fc_view_1, add_39, [512], grad_h4_detach, None, [True, False])  # out0: strides=(1048576, 512, 1), contiguous=True, view=False
+    grad_h4__fused_rms_norm_backward = aten._fused_rms_norm_backward(grad_h4_mlp_c_fc_view_1, add_39, [512], detach_31, None, [True, False])  # out0: strides=(1048576, 512, 1), contiguous=True, view=False
     grad_h4_getitem: 'bfloat16[32, 2048, 512]' = operator.getitem(grad_h4__fused_rms_norm_backward, 0)  # strides=(1048576, 512, 1), contiguous=True, view=True
     add_104: 'bfloat16[32, 2048, 512]' = aten.add.Tensor(grad_mul_54_mul, grad_h4_getitem)  # strides=(1048576, 512, 1), contiguous=True, view=False
 
@@ -2687,19 +2620,16 @@ def backward(
     # y = y.contiguous().view(B, T, -1)
     grad_h4_attn_view: 'bfloat16[32, 2048, 4, 128]' = aten.view(grad_h4_attn_c_proj_view_1, [32, 2048, 4, 128])  # strides=(1048576, 512, 128, 1), contiguous=True, view=True
     grad_h4_attn_transpose: 'bfloat16[32, 4, 2048, 128]' = aten.transpose.int(grad_h4_attn_view, 1, 2)  # strides=(1048576, 128, 512, 1), contiguous=False, view=True
-    grad_h4_attn_detach: 'bfloat16[32, 4, 2048, 128]' = aten.detach(detach_30)  # strides=(1048576, 128, 512, 1), contiguous=False, view=True
-    grad_h4_attn__scaled_dot_product_cudnn_attention_backward = aten._scaled_dot_product_cudnn_attention_backward(grad_h4_attn_transpose, transpose_16, transpose_17, transpose_18, grad_h4_attn_detach, getitem_77, getitem_82, getitem_83, where_3, None, None, 2048, 2048, 0.0, False)  # out0: strides=(1048576, 128, 512, 1), contiguous=False; out1: strides=(1048576, 128, 512, 1), contiguous=False; out2: strides=(1048576, 128, 512, 1), contiguous=False, view=False
+    grad_h4_attn__scaled_dot_product_cudnn_attention_backward = aten._scaled_dot_product_cudnn_attention_backward(grad_h4_attn_transpose, transpose_16, transpose_17, transpose_18, detach_30, getitem_77, getitem_82, getitem_83, where_3, None, None, 2048, 2048, 0.0, False)  # out0: strides=(1048576, 128, 512, 1), contiguous=False; out1: strides=(1048576, 128, 512, 1), contiguous=False; out2: strides=(1048576, 128, 512, 1), contiguous=False, view=False
     grad_h4_attn_getitem: 'bfloat16[32, 4, 2048, 128]' = operator.getitem(grad_h4_attn__scaled_dot_product_cudnn_attention_backward, 0)  # strides=(1048576, 128, 512, 1), contiguous=False, view=True
     grad_h4_attn_getitem_1: 'bfloat16[32, 4, 2048, 128]' = operator.getitem(grad_h4_attn__scaled_dot_product_cudnn_attention_backward, 1)  # strides=(1048576, 128, 512, 1), contiguous=False, view=True
     grad_h4_attn_getitem_2: 'bfloat16[32, 4, 2048, 128]' = operator.getitem(grad_h4_attn__scaled_dot_product_cudnn_attention_backward, 2)  # strides=(1048576, 128, 512, 1), contiguous=False, view=True
     grad_h4_attn_transpose_1: 'bfloat16[32, 2048, 4, 128]' = aten.transpose.int(grad_h4_attn_getitem_2, 1, 2)  # strides=(1048576, 512, 128, 1), contiguous=True, view=True
     grad_h4_attn_transpose_2: 'bfloat16[32, 2048, 4, 128]' = aten.transpose.int(grad_h4_attn_getitem_1, 1, 2)  # strides=(1048576, 512, 128, 1), contiguous=True, view=True
     grad_h4_attn_transpose_3: 'bfloat16[32, 2048, 4, 128]' = aten.transpose.int(grad_h4_attn_getitem, 1, 2)  # strides=(1048576, 512, 128, 1), contiguous=True, view=True
-    grad_h4_attn_detach_1: 'float32[32, 2048, 4, 1]' = aten.detach(detach_29)  # strides=(8192, 4, 1, 1), contiguous=True, view=True
-    grad_h4_attn__fused_rms_norm_backward = aten._fused_rms_norm_backward(grad_h4_attn_transpose_2, cat_9, [128], grad_h4_attn_detach_1, None, [True, False])  # out0: strides=(1048576, 512, 128, 1), contiguous=True, view=False
+    grad_h4_attn__fused_rms_norm_backward = aten._fused_rms_norm_backward(grad_h4_attn_transpose_2, cat_9, [128], detach_29, None, [True, False])  # out0: strides=(1048576, 512, 128, 1), contiguous=True, view=False
     grad_h4_attn_getitem_3: 'bfloat16[32, 2048, 4, 128]' = operator.getitem(grad_h4_attn__fused_rms_norm_backward, 0)  # strides=(1048576, 512, 128, 1), contiguous=True, view=True
-    grad_h4_attn_detach_2: 'float32[32, 2048, 4, 1]' = aten.detach(detach_28)  # strides=(8192, 4, 1, 1), contiguous=True, view=True
-    grad_h4_attn__fused_rms_norm_backward_1 = aten._fused_rms_norm_backward(grad_h4_attn_transpose_3, cat_8, [128], grad_h4_attn_detach_2, None, [True, False])  # out0: strides=(1048576, 512, 128, 1), contiguous=True, view=False
+    grad_h4_attn__fused_rms_norm_backward_1 = aten._fused_rms_norm_backward(grad_h4_attn_transpose_3, cat_8, [128], detach_28, None, [True, False])  # out0: strides=(1048576, 512, 128, 1), contiguous=True, view=False
     grad_h4_attn_getitem_4: 'bfloat16[32, 2048, 4, 128]' = operator.getitem(grad_h4_attn__fused_rms_norm_backward_1, 0)  # strides=(1048576, 512, 128, 1), contiguous=True, view=True
     add_107 = torch_rope_fwd(grad_h4_attn_getitem_3, slice_1, neg_9)  # FUSED: backward RoPE (11 ops -> 4 kernels)
     add_110 = torch_rope_fwd(grad_h4_attn_getitem_4, slice_1, neg_8)  # FUSED: backward RoPE (11 ops -> 4 kernels)
@@ -2760,8 +2690,7 @@ def backward(
     # grad of self.transformer.h.4 (Block) → d_loss/d_4
     # /.venv/lib/python3.12/site-packages/torch/nn/functional.py:2954
     # return torch.rms_norm(input, normalized_shape, weight, eps)
-    grad_h4_detach_1: 'float32[32, 2048, 1]' = aten.detach(detach_27)  # strides=(2048, 1, 1), contiguous=True, view=True
-    grad_h4__fused_rms_norm_backward_1 = aten._fused_rms_norm_backward(add_112, add_33, [512], grad_h4_detach_1, None, [True, False])  # out0: strides=(1048576, 512, 1), contiguous=True, view=False
+    grad_h4__fused_rms_norm_backward_1 = aten._fused_rms_norm_backward(add_112, add_33, [512], detach_27, None, [True, False])  # out0: strides=(1048576, 512, 1), contiguous=True, view=False
     grad_h4_getitem_1: 'bfloat16[32, 2048, 512]' = operator.getitem(grad_h4__fused_rms_norm_backward_1, 0)  # strides=(1048576, 512, 1), contiguous=True, view=True
     add_113: 'bfloat16[32, 2048, 512]' = aten.add.Tensor(add_104, grad_h4_getitem_1)  # strides=(1048576, 512, 1), contiguous=True, view=False
 
@@ -2820,8 +2749,7 @@ def backward(
     # grad of self.transformer.h.3 (Block) → d_loss/d_3
     # /.venv/lib/python3.12/site-packages/torch/nn/functional.py:2954
     # return torch.rms_norm(input, normalized_shape, weight, eps)
-    grad_h3_detach: 'float32[32, 2048, 1]' = aten.detach(detach_25)  # strides=(2048, 1, 1), contiguous=True, view=True
-    grad_h3__fused_rms_norm_backward = aten._fused_rms_norm_backward(grad_h3_mlp_c_fc_view_1, add_31, [512], grad_h3_detach, None, [True, False])  # out0: strides=(1048576, 512, 1), contiguous=True, view=False
+    grad_h3__fused_rms_norm_backward = aten._fused_rms_norm_backward(grad_h3_mlp_c_fc_view_1, add_31, [512], detach_25, None, [True, False])  # out0: strides=(1048576, 512, 1), contiguous=True, view=False
     grad_h3_getitem: 'bfloat16[32, 2048, 512]' = operator.getitem(grad_h3__fused_rms_norm_backward, 0)  # strides=(1048576, 512, 1), contiguous=True, view=True
     add_117: 'bfloat16[32, 2048, 512]' = aten.add.Tensor(grad_mul_44_mul, grad_h3_getitem)  # strides=(1048576, 512, 1), contiguous=True, view=False
 
@@ -2843,19 +2771,16 @@ def backward(
     # y = y.contiguous().view(B, T, -1)
     grad_h3_attn_view: 'bfloat16[32, 2048, 4, 128]' = aten.view(grad_h3_attn_c_proj_view_1, [32, 2048, 4, 128])  # strides=(1048576, 512, 128, 1), contiguous=True, view=True
     grad_h3_attn_transpose: 'bfloat16[32, 4, 2048, 128]' = aten.transpose.int(grad_h3_attn_view, 1, 2)  # strides=(1048576, 128, 512, 1), contiguous=False, view=True
-    grad_h3_attn_detach: 'bfloat16[32, 4, 2048, 128]' = aten.detach(detach_24)  # strides=(1048576, 128, 512, 1), contiguous=False, view=True
-    grad_h3_attn__scaled_dot_product_cudnn_attention_backward = aten._scaled_dot_product_cudnn_attention_backward(grad_h3_attn_transpose, transpose_12, transpose_13, transpose_14, grad_h3_attn_detach, getitem_60, getitem_65, getitem_66, None, None, None, 2048, 2048, 0.0, True)  # out0: strides=(1048576, 128, 512, 1), contiguous=False; out1: strides=(1048576, 128, 512, 1), contiguous=False; out2: strides=(1048576, 128, 512, 1), contiguous=False, view=False
+    grad_h3_attn__scaled_dot_product_cudnn_attention_backward = aten._scaled_dot_product_cudnn_attention_backward(grad_h3_attn_transpose, transpose_12, transpose_13, transpose_14, detach_24, getitem_60, getitem_65, getitem_66, None, None, None, 2048, 2048, 0.0, True)  # out0: strides=(1048576, 128, 512, 1), contiguous=False; out1: strides=(1048576, 128, 512, 1), contiguous=False; out2: strides=(1048576, 128, 512, 1), contiguous=False, view=False
     grad_h3_attn_getitem: 'bfloat16[32, 4, 2048, 128]' = operator.getitem(grad_h3_attn__scaled_dot_product_cudnn_attention_backward, 0)  # strides=(1048576, 128, 512, 1), contiguous=False, view=True
     grad_h3_attn_getitem_1: 'bfloat16[32, 4, 2048, 128]' = operator.getitem(grad_h3_attn__scaled_dot_product_cudnn_attention_backward, 1)  # strides=(1048576, 128, 512, 1), contiguous=False, view=True
     grad_h3_attn_getitem_2: 'bfloat16[32, 4, 2048, 128]' = operator.getitem(grad_h3_attn__scaled_dot_product_cudnn_attention_backward, 2)  # strides=(1048576, 128, 512, 1), contiguous=False, view=True
     grad_h3_attn_transpose_1: 'bfloat16[32, 2048, 4, 128]' = aten.transpose.int(grad_h3_attn_getitem_2, 1, 2)  # strides=(1048576, 512, 128, 1), contiguous=True, view=True
     grad_h3_attn_transpose_2: 'bfloat16[32, 2048, 4, 128]' = aten.transpose.int(grad_h3_attn_getitem_1, 1, 2)  # strides=(1048576, 512, 128, 1), contiguous=True, view=True
     grad_h3_attn_transpose_3: 'bfloat16[32, 2048, 4, 128]' = aten.transpose.int(grad_h3_attn_getitem, 1, 2)  # strides=(1048576, 512, 128, 1), contiguous=True, view=True
-    grad_h3_attn_detach_1: 'float32[32, 2048, 4, 1]' = aten.detach(detach_23)  # strides=(8192, 4, 1, 1), contiguous=True, view=True
-    grad_h3_attn__fused_rms_norm_backward = aten._fused_rms_norm_backward(grad_h3_attn_transpose_2, cat_7, [128], grad_h3_attn_detach_1, None, [True, False])  # out0: strides=(1048576, 512, 128, 1), contiguous=True, view=False
+    grad_h3_attn__fused_rms_norm_backward = aten._fused_rms_norm_backward(grad_h3_attn_transpose_2, cat_7, [128], detach_23, None, [True, False])  # out0: strides=(1048576, 512, 128, 1), contiguous=True, view=False
     grad_h3_attn_getitem_3: 'bfloat16[32, 2048, 4, 128]' = operator.getitem(grad_h3_attn__fused_rms_norm_backward, 0)  # strides=(1048576, 512, 128, 1), contiguous=True, view=True
-    grad_h3_attn_detach_2: 'float32[32, 2048, 4, 1]' = aten.detach(detach_22)  # strides=(8192, 4, 1, 1), contiguous=True, view=True
-    grad_h3_attn__fused_rms_norm_backward_1 = aten._fused_rms_norm_backward(grad_h3_attn_transpose_3, cat_6, [128], grad_h3_attn_detach_2, None, [True, False])  # out0: strides=(1048576, 512, 128, 1), contiguous=True, view=False
+    grad_h3_attn__fused_rms_norm_backward_1 = aten._fused_rms_norm_backward(grad_h3_attn_transpose_3, cat_6, [128], detach_22, None, [True, False])  # out0: strides=(1048576, 512, 128, 1), contiguous=True, view=False
     grad_h3_attn_getitem_4: 'bfloat16[32, 2048, 4, 128]' = operator.getitem(grad_h3_attn__fused_rms_norm_backward_1, 0)  # strides=(1048576, 512, 128, 1), contiguous=True, view=True
     add_120 = torch_rope_fwd(grad_h3_attn_getitem_3, slice_1, neg_7)  # FUSED: backward RoPE (11 ops -> 4 kernels)
     add_123 = torch_rope_fwd(grad_h3_attn_getitem_4, slice_1, neg_6)  # FUSED: backward RoPE (11 ops -> 4 kernels)
@@ -2865,8 +2790,7 @@ def backward(
     grad_h3_attn__to_copy: 'bfloat16[32, 2048, 4, 1]' = aten._to_copy(grad_h3_attn_sum, dtype=torch.bfloat16)  # strides=(8192, 4, 1, 1), contiguous=True, view=False
     grad_h3_attn_squeeze: 'bfloat16[32, 2048, 4]' = aten.squeeze.dim(grad_h3_attn__to_copy, -1)  # strides=(8192, 4, 1), contiguous=True, view=True
     grad_h3_attn_mul_10: 'bfloat16[32, 2048, 4]' = aten.mul.Tensor(grad_h3_attn_squeeze, 2)  # strides=(8192, 4, 1), contiguous=True, view=False
-    grad_h3_attn_detach_3: 'bfloat16[32, 2048, 4]' = aten.detach(detach_21)  # strides=(8192, 4, 1), contiguous=True, view=True
-    grad_h3_attn_sigmoid_backward: 'bfloat16[32, 2048, 4]' = aten.sigmoid_backward(grad_h3_attn_mul_10, grad_h3_attn_detach_3)  # strides=(8192, 4, 1), contiguous=True, view=False
+    grad_h3_attn_sigmoid_backward: 'bfloat16[32, 2048, 4]' = aten.sigmoid_backward(grad_h3_attn_mul_10, detach_21)  # strides=(8192, 4, 1), contiguous=True, view=False
 
     # grad of self.transformer.h.3.attn.ve_gate (Linear) → d_loss/d_ve_gate
     # /.autoresearch_repo/train.py:81
@@ -2945,8 +2869,7 @@ def backward(
     # grad of self.transformer.h.3 (Block) → d_loss/d_3
     # /.venv/lib/python3.12/site-packages/torch/nn/functional.py:2954
     # return torch.rms_norm(input, normalized_shape, weight, eps)
-    grad_h3_detach_1: 'float32[32, 2048, 1]' = aten.detach(detach_20)  # strides=(2048, 1, 1), contiguous=True, view=True
-    grad_h3__fused_rms_norm_backward_1 = aten._fused_rms_norm_backward(add_126, add_25, [512], grad_h3_detach_1, None, [True, False])  # out0: strides=(1048576, 512, 1), contiguous=True, view=False
+    grad_h3__fused_rms_norm_backward_1 = aten._fused_rms_norm_backward(add_126, add_25, [512], detach_20, None, [True, False])  # out0: strides=(1048576, 512, 1), contiguous=True, view=False
     grad_h3_getitem_1: 'bfloat16[32, 2048, 512]' = operator.getitem(grad_h3__fused_rms_norm_backward_1, 0)  # strides=(1048576, 512, 1), contiguous=True, view=True
     add_127: 'bfloat16[32, 2048, 512]' = aten.add.Tensor(add_117, grad_h3_getitem_1)  # strides=(1048576, 512, 1), contiguous=True, view=False
 
@@ -3014,8 +2937,7 @@ def backward(
     # grad of self.transformer.h.2 (Block) → d_loss/d_2
     # /.venv/lib/python3.12/site-packages/torch/nn/functional.py:2954
     # return torch.rms_norm(input, normalized_shape, weight, eps)
-    grad_h2_detach: 'float32[32, 2048, 1]' = aten.detach(detach_18)  # strides=(2048, 1, 1), contiguous=True, view=True
-    grad_h2__fused_rms_norm_backward = aten._fused_rms_norm_backward(grad_h2_mlp_c_fc_view_1, add_23, [512], grad_h2_detach, None, [True, False])  # out0: strides=(1048576, 512, 1), contiguous=True, view=False
+    grad_h2__fused_rms_norm_backward = aten._fused_rms_norm_backward(grad_h2_mlp_c_fc_view_1, add_23, [512], detach_18, None, [True, False])  # out0: strides=(1048576, 512, 1), contiguous=True, view=False
     grad_h2_getitem: 'bfloat16[32, 2048, 512]' = operator.getitem(grad_h2__fused_rms_norm_backward, 0)  # strides=(1048576, 512, 1), contiguous=True, view=True
     add_131: 'bfloat16[32, 2048, 512]' = aten.add.Tensor(grad_mul_32_mul, grad_h2_getitem)  # strides=(1048576, 512, 1), contiguous=True, view=False
 
@@ -3037,19 +2959,16 @@ def backward(
     # y = y.contiguous().view(B, T, -1)
     grad_h2_attn_view: 'bfloat16[32, 2048, 4, 128]' = aten.view(grad_h2_attn_c_proj_view_1, [32, 2048, 4, 128])  # strides=(1048576, 512, 128, 1), contiguous=True, view=True
     grad_h2_attn_transpose: 'bfloat16[32, 4, 2048, 128]' = aten.transpose.int(grad_h2_attn_view, 1, 2)  # strides=(1048576, 128, 512, 1), contiguous=False, view=True
-    grad_h2_attn_detach: 'bfloat16[32, 4, 2048, 128]' = aten.detach(detach_17)  # strides=(1048576, 128, 512, 1), contiguous=False, view=True
-    grad_h2_attn__scaled_dot_product_cudnn_attention_backward = aten._scaled_dot_product_cudnn_attention_backward(grad_h2_attn_transpose, transpose_8, transpose_9, transpose_10, grad_h2_attn_detach, getitem_43, getitem_48, getitem_49, where_2, None, None, 2048, 2048, 0.0, False)  # out0: strides=(1048576, 128, 512, 1), contiguous=False; out1: strides=(1048576, 128, 512, 1), contiguous=False; out2: strides=(1048576, 128, 512, 1), contiguous=False, view=False
+    grad_h2_attn__scaled_dot_product_cudnn_attention_backward = aten._scaled_dot_product_cudnn_attention_backward(grad_h2_attn_transpose, transpose_8, transpose_9, transpose_10, detach_17, getitem_43, getitem_48, getitem_49, where_2, None, None, 2048, 2048, 0.0, False)  # out0: strides=(1048576, 128, 512, 1), contiguous=False; out1: strides=(1048576, 128, 512, 1), contiguous=False; out2: strides=(1048576, 128, 512, 1), contiguous=False, view=False
     grad_h2_attn_getitem: 'bfloat16[32, 4, 2048, 128]' = operator.getitem(grad_h2_attn__scaled_dot_product_cudnn_attention_backward, 0)  # strides=(1048576, 128, 512, 1), contiguous=False, view=True
     grad_h2_attn_getitem_1: 'bfloat16[32, 4, 2048, 128]' = operator.getitem(grad_h2_attn__scaled_dot_product_cudnn_attention_backward, 1)  # strides=(1048576, 128, 512, 1), contiguous=False, view=True
     grad_h2_attn_getitem_2: 'bfloat16[32, 4, 2048, 128]' = operator.getitem(grad_h2_attn__scaled_dot_product_cudnn_attention_backward, 2)  # strides=(1048576, 128, 512, 1), contiguous=False, view=True
     grad_h2_attn_transpose_1: 'bfloat16[32, 2048, 4, 128]' = aten.transpose.int(grad_h2_attn_getitem_2, 1, 2)  # strides=(1048576, 512, 128, 1), contiguous=True, view=True
     grad_h2_attn_transpose_2: 'bfloat16[32, 2048, 4, 128]' = aten.transpose.int(grad_h2_attn_getitem_1, 1, 2)  # strides=(1048576, 512, 128, 1), contiguous=True, view=True
     grad_h2_attn_transpose_3: 'bfloat16[32, 2048, 4, 128]' = aten.transpose.int(grad_h2_attn_getitem, 1, 2)  # strides=(1048576, 512, 128, 1), contiguous=True, view=True
-    grad_h2_attn_detach_1: 'float32[32, 2048, 4, 1]' = aten.detach(detach_16)  # strides=(8192, 4, 1, 1), contiguous=True, view=True
-    grad_h2_attn__fused_rms_norm_backward = aten._fused_rms_norm_backward(grad_h2_attn_transpose_2, cat_5, [128], grad_h2_attn_detach_1, None, [True, False])  # out0: strides=(1048576, 512, 128, 1), contiguous=True, view=False
+    grad_h2_attn__fused_rms_norm_backward = aten._fused_rms_norm_backward(grad_h2_attn_transpose_2, cat_5, [128], detach_16, None, [True, False])  # out0: strides=(1048576, 512, 128, 1), contiguous=True, view=False
     grad_h2_attn_getitem_3: 'bfloat16[32, 2048, 4, 128]' = operator.getitem(grad_h2_attn__fused_rms_norm_backward, 0)  # strides=(1048576, 512, 128, 1), contiguous=True, view=True
-    grad_h2_attn_detach_2: 'float32[32, 2048, 4, 1]' = aten.detach(detach_15)  # strides=(8192, 4, 1, 1), contiguous=True, view=True
-    grad_h2_attn__fused_rms_norm_backward_1 = aten._fused_rms_norm_backward(grad_h2_attn_transpose_3, cat_4, [128], grad_h2_attn_detach_2, None, [True, False])  # out0: strides=(1048576, 512, 128, 1), contiguous=True, view=False
+    grad_h2_attn__fused_rms_norm_backward_1 = aten._fused_rms_norm_backward(grad_h2_attn_transpose_3, cat_4, [128], detach_15, None, [True, False])  # out0: strides=(1048576, 512, 128, 1), contiguous=True, view=False
     grad_h2_attn_getitem_4: 'bfloat16[32, 2048, 4, 128]' = operator.getitem(grad_h2_attn__fused_rms_norm_backward_1, 0)  # strides=(1048576, 512, 128, 1), contiguous=True, view=True
     add_134 = torch_rope_fwd(grad_h2_attn_getitem_3, slice_1, neg_5)  # FUSED: backward RoPE (11 ops -> 4 kernels)
     add_137 = torch_rope_fwd(grad_h2_attn_getitem_4, slice_1, neg_4)  # FUSED: backward RoPE (11 ops -> 4 kernels)
@@ -3110,8 +3029,7 @@ def backward(
     # grad of self.transformer.h.2 (Block) → d_loss/d_2
     # /.venv/lib/python3.12/site-packages/torch/nn/functional.py:2954
     # return torch.rms_norm(input, normalized_shape, weight, eps)
-    grad_h2_detach_1: 'float32[32, 2048, 1]' = aten.detach(detach_14)  # strides=(2048, 1, 1), contiguous=True, view=True
-    grad_h2__fused_rms_norm_backward_1 = aten._fused_rms_norm_backward(add_139, add_17, [512], grad_h2_detach_1, None, [True, False])  # out0: strides=(1048576, 512, 1), contiguous=True, view=False
+    grad_h2__fused_rms_norm_backward_1 = aten._fused_rms_norm_backward(add_139, add_17, [512], detach_14, None, [True, False])  # out0: strides=(1048576, 512, 1), contiguous=True, view=False
     grad_h2_getitem_1: 'bfloat16[32, 2048, 512]' = operator.getitem(grad_h2__fused_rms_norm_backward_1, 0)  # strides=(1048576, 512, 1), contiguous=True, view=True
     add_140: 'bfloat16[32, 2048, 512]' = aten.add.Tensor(add_131, grad_h2_getitem_1)  # strides=(1048576, 512, 1), contiguous=True, view=False
 
@@ -3170,8 +3088,7 @@ def backward(
     # grad of self.transformer.h.1 (Block) → d_loss/d_1
     # /.venv/lib/python3.12/site-packages/torch/nn/functional.py:2954
     # return torch.rms_norm(input, normalized_shape, weight, eps)
-    grad_h1_detach: 'float32[32, 2048, 1]' = aten.detach(detach_12)  # strides=(2048, 1, 1), contiguous=True, view=True
-    grad_h1__fused_rms_norm_backward = aten._fused_rms_norm_backward(grad_h1_mlp_c_fc_view_1, add_15, [512], grad_h1_detach, None, [True, False])  # out0: strides=(1048576, 512, 1), contiguous=True, view=False
+    grad_h1__fused_rms_norm_backward = aten._fused_rms_norm_backward(grad_h1_mlp_c_fc_view_1, add_15, [512], detach_12, None, [True, False])  # out0: strides=(1048576, 512, 1), contiguous=True, view=False
     grad_h1_getitem: 'bfloat16[32, 2048, 512]' = operator.getitem(grad_h1__fused_rms_norm_backward, 0)  # strides=(1048576, 512, 1), contiguous=True, view=True
     add_144: 'bfloat16[32, 2048, 512]' = aten.add.Tensor(grad_mul_22_mul, grad_h1_getitem)  # strides=(1048576, 512, 1), contiguous=True, view=False
 
@@ -3193,19 +3110,16 @@ def backward(
     # y = y.contiguous().view(B, T, -1)
     grad_h1_attn_view: 'bfloat16[32, 2048, 4, 128]' = aten.view(grad_h1_attn_c_proj_view_1, [32, 2048, 4, 128])  # strides=(1048576, 512, 128, 1), contiguous=True, view=True
     grad_h1_attn_transpose: 'bfloat16[32, 4, 2048, 128]' = aten.transpose.int(grad_h1_attn_view, 1, 2)  # strides=(1048576, 128, 512, 1), contiguous=False, view=True
-    grad_h1_attn_detach: 'bfloat16[32, 4, 2048, 128]' = aten.detach(detach_11)  # strides=(1048576, 128, 512, 1), contiguous=False, view=True
-    grad_h1_attn__scaled_dot_product_cudnn_attention_backward = aten._scaled_dot_product_cudnn_attention_backward(grad_h1_attn_transpose, transpose_4, transpose_5, transpose_6, grad_h1_attn_detach, getitem_26, getitem_31, getitem_32, where_1, None, None, 2048, 2048, 0.0, False)  # out0: strides=(1048576, 128, 512, 1), contiguous=False; out1: strides=(1048576, 128, 512, 1), contiguous=False; out2: strides=(1048576, 128, 512, 1), contiguous=False, view=False
+    grad_h1_attn__scaled_dot_product_cudnn_attention_backward = aten._scaled_dot_product_cudnn_attention_backward(grad_h1_attn_transpose, transpose_4, transpose_5, transpose_6, detach_11, getitem_26, getitem_31, getitem_32, where_1, None, None, 2048, 2048, 0.0, False)  # out0: strides=(1048576, 128, 512, 1), contiguous=False; out1: strides=(1048576, 128, 512, 1), contiguous=False; out2: strides=(1048576, 128, 512, 1), contiguous=False, view=False
     grad_h1_attn_getitem: 'bfloat16[32, 4, 2048, 128]' = operator.getitem(grad_h1_attn__scaled_dot_product_cudnn_attention_backward, 0)  # strides=(1048576, 128, 512, 1), contiguous=False, view=True
     grad_h1_attn_getitem_1: 'bfloat16[32, 4, 2048, 128]' = operator.getitem(grad_h1_attn__scaled_dot_product_cudnn_attention_backward, 1)  # strides=(1048576, 128, 512, 1), contiguous=False, view=True
     grad_h1_attn_getitem_2: 'bfloat16[32, 4, 2048, 128]' = operator.getitem(grad_h1_attn__scaled_dot_product_cudnn_attention_backward, 2)  # strides=(1048576, 128, 512, 1), contiguous=False, view=True
     grad_h1_attn_transpose_1: 'bfloat16[32, 2048, 4, 128]' = aten.transpose.int(grad_h1_attn_getitem_2, 1, 2)  # strides=(1048576, 512, 128, 1), contiguous=True, view=True
     grad_h1_attn_transpose_2: 'bfloat16[32, 2048, 4, 128]' = aten.transpose.int(grad_h1_attn_getitem_1, 1, 2)  # strides=(1048576, 512, 128, 1), contiguous=True, view=True
     grad_h1_attn_transpose_3: 'bfloat16[32, 2048, 4, 128]' = aten.transpose.int(grad_h1_attn_getitem, 1, 2)  # strides=(1048576, 512, 128, 1), contiguous=True, view=True
-    grad_h1_attn_detach_1: 'float32[32, 2048, 4, 1]' = aten.detach(detach_10)  # strides=(8192, 4, 1, 1), contiguous=True, view=True
-    grad_h1_attn__fused_rms_norm_backward = aten._fused_rms_norm_backward(grad_h1_attn_transpose_2, cat_3, [128], grad_h1_attn_detach_1, None, [True, False])  # out0: strides=(1048576, 512, 128, 1), contiguous=True, view=False
+    grad_h1_attn__fused_rms_norm_backward = aten._fused_rms_norm_backward(grad_h1_attn_transpose_2, cat_3, [128], detach_10, None, [True, False])  # out0: strides=(1048576, 512, 128, 1), contiguous=True, view=False
     grad_h1_attn_getitem_3: 'bfloat16[32, 2048, 4, 128]' = operator.getitem(grad_h1_attn__fused_rms_norm_backward, 0)  # strides=(1048576, 512, 128, 1), contiguous=True, view=True
-    grad_h1_attn_detach_2: 'float32[32, 2048, 4, 1]' = aten.detach(detach_9)  # strides=(8192, 4, 1, 1), contiguous=True, view=True
-    grad_h1_attn__fused_rms_norm_backward_1 = aten._fused_rms_norm_backward(grad_h1_attn_transpose_3, cat_2, [128], grad_h1_attn_detach_2, None, [True, False])  # out0: strides=(1048576, 512, 128, 1), contiguous=True, view=False
+    grad_h1_attn__fused_rms_norm_backward_1 = aten._fused_rms_norm_backward(grad_h1_attn_transpose_3, cat_2, [128], detach_9, None, [True, False])  # out0: strides=(1048576, 512, 128, 1), contiguous=True, view=False
     grad_h1_attn_getitem_4: 'bfloat16[32, 2048, 4, 128]' = operator.getitem(grad_h1_attn__fused_rms_norm_backward_1, 0)  # strides=(1048576, 512, 128, 1), contiguous=True, view=True
     add_147 = torch_rope_fwd(grad_h1_attn_getitem_3, slice_1, neg_3)  # FUSED: backward RoPE (11 ops -> 4 kernels)
     add_150 = torch_rope_fwd(grad_h1_attn_getitem_4, slice_1, neg_2)  # FUSED: backward RoPE (11 ops -> 4 kernels)
@@ -3215,8 +3129,7 @@ def backward(
     grad_h1_attn__to_copy: 'bfloat16[32, 2048, 4, 1]' = aten._to_copy(grad_h1_attn_sum, dtype=torch.bfloat16)  # strides=(8192, 4, 1, 1), contiguous=True, view=False
     grad_h1_attn_squeeze: 'bfloat16[32, 2048, 4]' = aten.squeeze.dim(grad_h1_attn__to_copy, -1)  # strides=(8192, 4, 1), contiguous=True, view=True
     grad_h1_attn_mul_10: 'bfloat16[32, 2048, 4]' = aten.mul.Tensor(grad_h1_attn_squeeze, 2)  # strides=(8192, 4, 1), contiguous=True, view=False
-    grad_h1_attn_detach_3: 'bfloat16[32, 2048, 4]' = aten.detach(detach_8)  # strides=(8192, 4, 1), contiguous=True, view=True
-    grad_h1_attn_sigmoid_backward: 'bfloat16[32, 2048, 4]' = aten.sigmoid_backward(grad_h1_attn_mul_10, grad_h1_attn_detach_3)  # strides=(8192, 4, 1), contiguous=True, view=False
+    grad_h1_attn_sigmoid_backward: 'bfloat16[32, 2048, 4]' = aten.sigmoid_backward(grad_h1_attn_mul_10, detach_8)  # strides=(8192, 4, 1), contiguous=True, view=False
 
     # grad of self.transformer.h.1.attn.ve_gate (Linear) → d_loss/d_ve_gate
     # /.autoresearch_repo/train.py:81
@@ -3295,8 +3208,7 @@ def backward(
     # grad of self.transformer.h.1 (Block) → d_loss/d_1
     # /.venv/lib/python3.12/site-packages/torch/nn/functional.py:2954
     # return torch.rms_norm(input, normalized_shape, weight, eps)
-    grad_h1_detach_1: 'float32[32, 2048, 1]' = aten.detach(detach_7)  # strides=(2048, 1, 1), contiguous=True, view=True
-    grad_h1__fused_rms_norm_backward_1 = aten._fused_rms_norm_backward(add_153, add_8, [512], grad_h1_detach_1, None, [True, False])  # out0: strides=(1048576, 512, 1), contiguous=True, view=False
+    grad_h1__fused_rms_norm_backward_1 = aten._fused_rms_norm_backward(add_153, add_8, [512], detach_7, None, [True, False])  # out0: strides=(1048576, 512, 1), contiguous=True, view=False
     grad_h1_getitem_1: 'bfloat16[32, 2048, 512]' = operator.getitem(grad_h1__fused_rms_norm_backward_1, 0)  # strides=(1048576, 512, 1), contiguous=True, view=True
     add_154: 'bfloat16[32, 2048, 512]' = aten.add.Tensor(add_144, grad_h1_getitem_1)  # strides=(1048576, 512, 1), contiguous=True, view=False
 
@@ -3364,8 +3276,7 @@ def backward(
     # grad of self.transformer.h.0 (Block) → d_loss/d_0
     # /.venv/lib/python3.12/site-packages/torch/nn/functional.py:2954
     # return torch.rms_norm(input, normalized_shape, weight, eps)
-    grad_h0_detach: 'float32[32, 2048, 1]' = aten.detach(detach_5)  # strides=(2048, 1, 1), contiguous=True, view=True
-    grad_h0__fused_rms_norm_backward = aten._fused_rms_norm_backward(grad_h0_mlp_c_fc_view_1, add_6, [512], grad_h0_detach, None, [True, False])  # out0: strides=(1048576, 512, 1), contiguous=True, view=False
+    grad_h0__fused_rms_norm_backward = aten._fused_rms_norm_backward(grad_h0_mlp_c_fc_view_1, add_6, [512], detach_5, None, [True, False])  # out0: strides=(1048576, 512, 1), contiguous=True, view=False
     grad_h0_getitem: 'bfloat16[32, 2048, 512]' = operator.getitem(grad_h0__fused_rms_norm_backward, 0)  # strides=(1048576, 512, 1), contiguous=True, view=True
     add_158: 'bfloat16[32, 2048, 512]' = aten.add.Tensor(grad_mul_10_mul, grad_h0_getitem)  # strides=(1048576, 512, 1), contiguous=True, view=False
 
@@ -3387,19 +3298,16 @@ def backward(
     # y = y.contiguous().view(B, T, -1)
     grad_h0_attn_view: 'bfloat16[32, 2048, 4, 128]' = aten.view(grad_h0_attn_c_proj_view_1, [32, 2048, 4, 128])  # strides=(1048576, 512, 128, 1), contiguous=True, view=True
     grad_h0_attn_transpose: 'bfloat16[32, 4, 2048, 128]' = aten.transpose.int(grad_h0_attn_view, 1, 2)  # strides=(1048576, 128, 512, 1), contiguous=False, view=True
-    grad_h0_attn_detach: 'bfloat16[32, 4, 2048, 128]' = aten.detach(detach_4)  # strides=(1048576, 128, 512, 1), contiguous=False, view=True
-    grad_h0_attn__scaled_dot_product_cudnn_attention_backward = aten._scaled_dot_product_cudnn_attention_backward(grad_h0_attn_transpose, transpose, transpose_1, transpose_2, grad_h0_attn_detach, getitem_9, getitem_14, getitem_15, where, None, None, 2048, 2048, 0.0, False)  # out0: strides=(1048576, 128, 512, 1), contiguous=False; out1: strides=(1048576, 128, 512, 1), contiguous=False; out2: strides=(1048576, 128, 512, 1), contiguous=False, view=False
+    grad_h0_attn__scaled_dot_product_cudnn_attention_backward = aten._scaled_dot_product_cudnn_attention_backward(grad_h0_attn_transpose, transpose, transpose_1, transpose_2, detach_4, getitem_9, getitem_14, getitem_15, where, None, None, 2048, 2048, 0.0, False)  # out0: strides=(1048576, 128, 512, 1), contiguous=False; out1: strides=(1048576, 128, 512, 1), contiguous=False; out2: strides=(1048576, 128, 512, 1), contiguous=False, view=False
     grad_h0_attn_getitem: 'bfloat16[32, 4, 2048, 128]' = operator.getitem(grad_h0_attn__scaled_dot_product_cudnn_attention_backward, 0)  # strides=(1048576, 128, 512, 1), contiguous=False, view=True
     grad_h0_attn_getitem_1: 'bfloat16[32, 4, 2048, 128]' = operator.getitem(grad_h0_attn__scaled_dot_product_cudnn_attention_backward, 1)  # strides=(1048576, 128, 512, 1), contiguous=False, view=True
     grad_h0_attn_getitem_2: 'bfloat16[32, 4, 2048, 128]' = operator.getitem(grad_h0_attn__scaled_dot_product_cudnn_attention_backward, 2)  # strides=(1048576, 128, 512, 1), contiguous=False, view=True
     grad_h0_attn_transpose_1: 'bfloat16[32, 2048, 4, 128]' = aten.transpose.int(grad_h0_attn_getitem_2, 1, 2)  # strides=(1048576, 512, 128, 1), contiguous=True, view=True
     grad_h0_attn_transpose_2: 'bfloat16[32, 2048, 4, 128]' = aten.transpose.int(grad_h0_attn_getitem_1, 1, 2)  # strides=(1048576, 512, 128, 1), contiguous=True, view=True
     grad_h0_attn_transpose_3: 'bfloat16[32, 2048, 4, 128]' = aten.transpose.int(grad_h0_attn_getitem, 1, 2)  # strides=(1048576, 512, 128, 1), contiguous=True, view=True
-    grad_h0_attn_detach_1: 'float32[32, 2048, 4, 1]' = aten.detach(detach_3)  # strides=(8192, 4, 1, 1), contiguous=True, view=True
-    grad_h0_attn__fused_rms_norm_backward = aten._fused_rms_norm_backward(grad_h0_attn_transpose_2, cat_1, [128], grad_h0_attn_detach_1, None, [True, False])  # out0: strides=(1048576, 512, 128, 1), contiguous=True, view=False
+    grad_h0_attn__fused_rms_norm_backward = aten._fused_rms_norm_backward(grad_h0_attn_transpose_2, cat_1, [128], detach_3, None, [True, False])  # out0: strides=(1048576, 512, 128, 1), contiguous=True, view=False
     grad_h0_attn_getitem_3: 'bfloat16[32, 2048, 4, 128]' = operator.getitem(grad_h0_attn__fused_rms_norm_backward, 0)  # strides=(1048576, 512, 128, 1), contiguous=True, view=True
-    grad_h0_attn_detach_2: 'float32[32, 2048, 4, 1]' = aten.detach(detach_2)  # strides=(8192, 4, 1, 1), contiguous=True, view=True
-    grad_h0_attn__fused_rms_norm_backward_1 = aten._fused_rms_norm_backward(grad_h0_attn_transpose_3, cat, [128], grad_h0_attn_detach_2, None, [True, False])  # out0: strides=(1048576, 512, 128, 1), contiguous=True, view=False
+    grad_h0_attn__fused_rms_norm_backward_1 = aten._fused_rms_norm_backward(grad_h0_attn_transpose_3, cat, [128], detach_2, None, [True, False])  # out0: strides=(1048576, 512, 128, 1), contiguous=True, view=False
     grad_h0_attn_getitem_4: 'bfloat16[32, 2048, 4, 128]' = operator.getitem(grad_h0_attn__fused_rms_norm_backward_1, 0)  # strides=(1048576, 512, 128, 1), contiguous=True, view=True
     add_161 = torch_rope_fwd(grad_h0_attn_getitem_3, slice_1, neg_1)  # FUSED: backward RoPE (11 ops -> 4 kernels)
     grad_h0_attn_slice_2: 'bfloat16[32, 2048, 4, 64]' = aten.slice.Tensor(grad_h0_attn_getitem_4, 3, 0, 64)  # strides=(1048576, 512, 128, 1), contiguous=False, view=True
@@ -3470,8 +3378,7 @@ def backward(
     # grad of self.transformer.h.0 (Block) → d_loss/d_0
     # /.venv/lib/python3.12/site-packages/torch/nn/functional.py:2954
     # return torch.rms_norm(input, normalized_shape, weight, eps)
-    grad_h0_detach_1: 'float32[32, 2048, 1]' = aten.detach(detach_1)  # strides=(2048, 1, 1), contiguous=True, view=True
-    grad_h0__fused_rms_norm_backward_1 = aten._fused_rms_norm_backward(add_166, add, [512], grad_h0_detach_1, None, [True, False])  # out0: strides=(1048576, 512, 1), contiguous=True, view=False
+    grad_h0__fused_rms_norm_backward_1 = aten._fused_rms_norm_backward(add_166, add, [512], detach_1, None, [True, False])  # out0: strides=(1048576, 512, 1), contiguous=True, view=False
     grad_h0_getitem_1: 'bfloat16[32, 2048, 512]' = operator.getitem(grad_h0__fused_rms_norm_backward_1, 0)  # strides=(1048576, 512, 1), contiguous=True, view=True
     add_167: 'bfloat16[32, 2048, 512]' = aten.add.Tensor(add_158, grad_h0_getitem_1)  # strides=(1048576, 512, 1), contiguous=True, view=False
 
@@ -3496,8 +3403,7 @@ def backward(
 
     # /.venv/lib/python3.12/site-packages/torch/nn/functional.py:2954
     # return torch.rms_norm(input, normalized_shape, weight, eps)
-    grad_rms_norm_detach: 'float32[32, 2048, 1]' = aten.detach(detach)  # strides=(2048, 1, 1), contiguous=True, view=True
-    grad_rms_norm__fused_rms_norm_backward = aten._fused_rms_norm_backward(add_170, embedding, [512], grad_rms_norm_detach, None, [True, False])  # out0: strides=(1048576, 512, 1), contiguous=True, view=False
+    grad_rms_norm__fused_rms_norm_backward = aten._fused_rms_norm_backward(add_170, embedding, [512], detach, None, [True, False])  # out0: strides=(1048576, 512, 1), contiguous=True, view=False
     grad_rms_norm_getitem: 'bfloat16[32, 2048, 512]' = operator.getitem(grad_rms_norm__fused_rms_norm_backward, 0)  # strides=(1048576, 512, 1), contiguous=True, view=True
 
     # ════════════════════════════════════════════════════════════════

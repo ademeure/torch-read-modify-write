@@ -124,7 +124,13 @@ def capture_inductor_debug(
 
     try:
         torch.compiler.reset()
-        compiled = torch.compile(model_or_fn, backend="inductor")
+        # Use the real torch.compile if auto_install has patched it
+        try:
+            from torch_graph.auto_install import _real_torch_compile
+        except ImportError:
+            _real_torch_compile = None
+        _compile_fn = _real_torch_compile or torch.compile
+        compiled = _compile_fn(model_or_fn, backend="inductor")
         if run_backward:
             output = compiled(*args, **kwargs)
             if loss_fn:

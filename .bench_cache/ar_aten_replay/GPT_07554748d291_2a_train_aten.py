@@ -189,7 +189,7 @@ def _sqrelu_bwd_kernel(
     out = tl.where(rb > 0, deriv, 0.0)
     tl.store(out_ptr + offs, out.to(tl.bfloat16), mask=mask)
 
-def triton_squared_relu_bwd(grad_fp32, relu_fp32, relu_bf16):
+def cuda_sqrelu_bwd(grad_fp32, relu_fp32, relu_bf16):
     """Fused squared ReLU backward: grad * 2 * relu * (relu > 0) -> bf16."""
     n = grad_fp32.numel()
     out = torch.empty(grad_fp32.shape, dtype=torch.bfloat16, device=grad_fp32.device)
@@ -220,7 +220,7 @@ def _sqrelu_fwd_kernel(
     sq = (r_fp32 * r_fp32).to(tl.bfloat16)
     tl.store(sq_bf16_ptr + offs, sq, mask=mask)
 
-def triton_squared_relu_fwd(x_bf16):
+def cuda_sqrelu_fwd(x_bf16):
     """Fused relu + square: returns (relu_bf16, relu_fp32, squared_bf16)."""
     n = x_bf16.numel()
     relu_bf16 = torch.empty_like(x_bf16)
@@ -445,6 +445,179 @@ def cuda_softcap_fwd(x_bf16, softcap=15):
     results = _cuda_softcap_fwd_mod.cuda_softcap_fwd(x_bf16.contiguous(), float(softcap))
     return results[0], results[1]
 # ── End inline CUDA softcap forward kernel ────────────────────────────
+
+
+# ── Inline CUDA kernel: fused squared relu forward ───────────────────
+_cuda_sqrelu_fwd_cpp = """
+std::vector<torch::Tensor> cuda_sqrelu_fwd(torch::Tensor x);
+"""
+
+_cuda_sqrelu_fwd_cu = r"""
+#include <torch/extension.h>
+#include <cuda_bf16.h>
+
+__global__ void sqrelu_fwd_kernel(
+    const __nv_bfloat16* __restrict__ x,
+    __nv_bfloat16* __restrict__ relu_bf16,
+    float* __restrict__ relu_fp32,
+    __nv_bfloat16* __restrict__ sq_bf16,
+    int64_t n
+) {
+    int64_t idx = (int64_t)blockIdx.x * blockDim.x + threadIdx.x;
+    idx *= 4;  // 4 elements per thread
+    if (idx + 3 < n) {
+        const __nv_bfloat162* x2 = reinterpret_cast<const __nv_bfloat162*>(x + idx);
+        float2 f0 = __bfloat1622float2(x2[0]);
+        float2 f1 = __bfloat1622float2(x2[1]);
+
+        // relu
+        float r0 = fmaxf(f0.x, 0.0f);
+        float r1 = fmaxf(f0.y, 0.0f);
+        float r2 = fmaxf(f1.x, 0.0f);
+        float r3 = fmaxf(f1.y, 0.0f);
+
+        // Store relu_fp32
+        relu_fp32[idx]     = r0;
+        relu_fp32[idx + 1] = r1;
+        relu_fp32[idx + 2] = r2;
+        relu_fp32[idx + 3] = r3;
+
+        // Store relu_bf16
+        __nv_bfloat162* rb2 = reinterpret_cast<__nv_bfloat162*>(relu_bf16 + idx);
+        rb2[0] = __floats2bfloat162_rn(r0, r1);
+        rb2[1] = __floats2bfloat162_rn(r2, r3);
+
+        // Store sq_bf16 = relu^2
+        __nv_bfloat162* sb2 = reinterpret_cast<__nv_bfloat162*>(sq_bf16 + idx);
+        sb2[0] = __floats2bfloat162_rn(r0*r0, r1*r1);
+        sb2[1] = __floats2bfloat162_rn(r2*r2, r3*r3);
+    } else {
+        for (int64_t i = idx; i < min(idx + 4, n); i++) {
+            float xf = __bfloat162float(x[i]);
+            float r = fmaxf(xf, 0.0f);
+            relu_fp32[i] = r;
+            relu_bf16[i] = __float2bfloat16(r);
+            sq_bf16[i] = __float2bfloat16(r * r);
+        }
+    }
+}
+
+std::vector<torch::Tensor> cuda_sqrelu_fwd(torch::Tensor x) {
+    int64_t n = x.numel();
+    auto relu_bf16 = torch::empty_like(x);
+    auto relu_fp32 = torch::empty(x.sizes(), torch::dtype(torch::kFloat32).device(x.device()));
+    auto sq_bf16 = torch::empty_like(x);
+    int threads = 256;
+    int blocks = (n / 4 + threads - 1) / threads;
+    sqrelu_fwd_kernel<<<blocks, threads>>>(
+        reinterpret_cast<const __nv_bfloat16*>(x.data_ptr()),
+        reinterpret_cast<__nv_bfloat16*>(relu_bf16.data_ptr()),
+        relu_fp32.data_ptr<float>(),
+        reinterpret_cast<__nv_bfloat16*>(sq_bf16.data_ptr()),
+        n
+    );
+    return {relu_bf16, relu_fp32, sq_bf16};
+}
+"""
+
+_cuda_sqrelu_fwd_mod = torch.utils.cpp_extension.load_inline(
+    name="cuda_sqrelu_fwd_v1",
+    cpp_sources=_cuda_sqrelu_fwd_cpp,
+    cuda_sources=_cuda_sqrelu_fwd_cu,
+    functions=["cuda_sqrelu_fwd"],
+    verbose=False,
+)
+
+def cuda_sqrelu_fwd(x_bf16):
+    """Fused relu + fp32 + square + bf16 in single CUDA kernel."""
+    results = _cuda_sqrelu_fwd_mod.cuda_sqrelu_fwd(x_bf16.contiguous())
+    return results[0], results[1], results[2]
+# ── End inline CUDA squared relu forward kernel ──────────────────────
+
+
+# ── Inline CUDA kernel: fused squared relu backward ──────────────────
+_cuda_sqrelu_bwd_cpp = """
+torch::Tensor cuda_sqrelu_bwd(torch::Tensor grad, torch::Tensor relu_fp32, torch::Tensor relu_bf16);
+"""
+
+_cuda_sqrelu_bwd_cu = r"""
+#include <torch/extension.h>
+#include <cuda_bf16.h>
+
+__global__ void sqrelu_bwd_kernel(
+    const __nv_bfloat16* __restrict__ grad,
+    const float* __restrict__ relu_fp32,
+    const __nv_bfloat16* __restrict__ relu_bf16,
+    __nv_bfloat16* __restrict__ out,
+    int64_t n
+) {
+    int64_t idx = (int64_t)blockIdx.x * blockDim.x + threadIdx.x;
+    idx *= 4;
+    if (idx + 3 < n) {
+        // Load grad (bf16)
+        const __nv_bfloat162* g2 = reinterpret_cast<const __nv_bfloat162*>(grad + idx);
+        float2 gf0 = __bfloat1622float2(g2[0]);
+        float2 gf1 = __bfloat1622float2(g2[1]);
+
+        // Load relu_fp32
+        float r0 = relu_fp32[idx];
+        float r1 = relu_fp32[idx + 1];
+        float r2 = relu_fp32[idx + 2];
+        float r3 = relu_fp32[idx + 3];
+
+        // Load relu_bf16 for mask
+        const __nv_bfloat162* rb2 = reinterpret_cast<const __nv_bfloat162*>(relu_bf16 + idx);
+        float2 rbf0 = __bfloat1622float2(rb2[0]);
+        float2 rbf1 = __bfloat1622float2(rb2[1]);
+
+        // grad * 2 * relu * (relu > 0)
+        float o0 = (rbf0.x > 0.0f) ? gf0.x * 2.0f * r0 : 0.0f;
+        float o1 = (rbf0.y > 0.0f) ? gf0.y * 2.0f * r1 : 0.0f;
+        float o2 = (rbf1.x > 0.0f) ? gf1.x * 2.0f * r2 : 0.0f;
+        float o3 = (rbf1.y > 0.0f) ? gf1.y * 2.0f * r3 : 0.0f;
+
+        __nv_bfloat162* out2 = reinterpret_cast<__nv_bfloat162*>(out + idx);
+        out2[0] = __floats2bfloat162_rn(o0, o1);
+        out2[1] = __floats2bfloat162_rn(o2, o3);
+    } else {
+        for (int64_t i = idx; i < min(idx + 4, n); i++) {
+            float g = __bfloat162float(grad[i]);
+            float r = relu_fp32[i];
+            float rb = __bfloat162float(relu_bf16[i]);
+            float result = (rb > 0.0f) ? g * 2.0f * r : 0.0f;
+            out[i] = __float2bfloat16(result);
+        }
+    }
+}
+
+torch::Tensor cuda_sqrelu_bwd(torch::Tensor grad, torch::Tensor relu_fp32, torch::Tensor relu_bf16) {
+    int64_t n = grad.numel();
+    auto out = torch::empty_like(grad);
+    int threads = 256;
+    int blocks = (n / 4 + threads - 1) / threads;
+    sqrelu_bwd_kernel<<<blocks, threads>>>(
+        reinterpret_cast<const __nv_bfloat16*>(grad.data_ptr()),
+        relu_fp32.data_ptr<float>(),
+        reinterpret_cast<const __nv_bfloat16*>(relu_bf16.data_ptr()),
+        reinterpret_cast<__nv_bfloat16*>(out.data_ptr()),
+        n
+    );
+    return out;
+}
+"""
+
+_cuda_sqrelu_bwd_mod = torch.utils.cpp_extension.load_inline(
+    name="cuda_sqrelu_bwd_v1",
+    cpp_sources=_cuda_sqrelu_bwd_cpp,
+    cuda_sources=_cuda_sqrelu_bwd_cu,
+    functions=["cuda_sqrelu_bwd"],
+    verbose=False,
+)
+
+def cuda_sqrelu_bwd(grad, relu_fp32, relu_bf16):
+    """Fused squared relu backward: grad * 2 * relu * (relu>0) -> bf16."""
+    return _cuda_sqrelu_bwd_mod.cuda_sqrelu_bwd(grad.contiguous(), relu_fp32.contiguous(), relu_bf16.contiguous())
+# ── End inline CUDA squared relu backward kernel ─────────────────────
 
 # ======================================================================
 # WEIGHTS / PARAMETERS
@@ -818,7 +991,7 @@ def forward(
     # self.transformer.h.0.mlp (MLP)
     # /.autoresearch_repo/train.py:102
     # x = F.relu(x).square()
-    h0_mlp_relu, h0_mlp__to_copy, _sqrelu_fwd_sq_0 = triton_squared_relu_fwd(h0_mlp_c_fc__unsafe_view)  # FUSED: squared ReLU forward via Triton
+    h0_mlp_relu, h0_mlp__to_copy, _sqrelu_fwd_sq_0 = cuda_sqrelu_fwd(h0_mlp_c_fc__unsafe_view)  # FUSED: squared ReLU forward via Triton
     h0_mlp_detach = h0_mlp_relu  # alias for backward saved tensor
     h0_mlp_pow = h0_mlp__to_copy  # alias (backward uses relu_fp32 directly)
 
@@ -973,7 +1146,7 @@ def forward(
     # self.transformer.h.1.mlp (MLP)
     # /.autoresearch_repo/train.py:102
     # x = F.relu(x).square()
-    h1_mlp_relu, h1_mlp__to_copy, _sqrelu_fwd_sq_1 = triton_squared_relu_fwd(h1_mlp_c_fc__unsafe_view)  # FUSED: squared ReLU forward via Triton
+    h1_mlp_relu, h1_mlp__to_copy, _sqrelu_fwd_sq_1 = cuda_sqrelu_fwd(h1_mlp_c_fc__unsafe_view)  # FUSED: squared ReLU forward via Triton
     h1_mlp_detach = h1_mlp_relu  # alias for backward saved tensor
     h1_mlp_pow = h1_mlp__to_copy  # alias (backward uses relu_fp32 directly)
 
@@ -1100,7 +1273,7 @@ def forward(
     # self.transformer.h.2.mlp (MLP)
     # /.autoresearch_repo/train.py:102
     # x = F.relu(x).square()
-    h2_mlp_relu, h2_mlp__to_copy, _sqrelu_fwd_sq_2 = triton_squared_relu_fwd(h2_mlp_c_fc__unsafe_view)  # FUSED: squared ReLU forward via Triton
+    h2_mlp_relu, h2_mlp__to_copy, _sqrelu_fwd_sq_2 = cuda_sqrelu_fwd(h2_mlp_c_fc__unsafe_view)  # FUSED: squared ReLU forward via Triton
     h2_mlp_detach = h2_mlp_relu  # alias for backward saved tensor
     h2_mlp_pow = h2_mlp__to_copy  # alias (backward uses relu_fp32 directly)
 
@@ -1254,7 +1427,7 @@ def forward(
     # self.transformer.h.3.mlp (MLP)
     # /.autoresearch_repo/train.py:102
     # x = F.relu(x).square()
-    h3_mlp_relu, h3_mlp__to_copy, _sqrelu_fwd_sq_3 = triton_squared_relu_fwd(h3_mlp_c_fc__unsafe_view)  # FUSED: squared ReLU forward via Triton
+    h3_mlp_relu, h3_mlp__to_copy, _sqrelu_fwd_sq_3 = cuda_sqrelu_fwd(h3_mlp_c_fc__unsafe_view)  # FUSED: squared ReLU forward via Triton
     h3_mlp_detach = h3_mlp_relu  # alias for backward saved tensor
     h3_mlp_pow = h3_mlp__to_copy  # alias (backward uses relu_fp32 directly)
 
@@ -1381,7 +1554,7 @@ def forward(
     # self.transformer.h.4.mlp (MLP)
     # /.autoresearch_repo/train.py:102
     # x = F.relu(x).square()
-    h4_mlp_relu, h4_mlp__to_copy, _sqrelu_fwd_sq_4 = triton_squared_relu_fwd(h4_mlp_c_fc__unsafe_view)  # FUSED: squared ReLU forward via Triton
+    h4_mlp_relu, h4_mlp__to_copy, _sqrelu_fwd_sq_4 = cuda_sqrelu_fwd(h4_mlp_c_fc__unsafe_view)  # FUSED: squared ReLU forward via Triton
     h4_mlp_detach = h4_mlp_relu  # alias for backward saved tensor
     h4_mlp_pow = h4_mlp__to_copy  # alias (backward uses relu_fp32 directly)
 
@@ -1536,7 +1709,7 @@ def forward(
     # self.transformer.h.5.mlp (MLP)
     # /.autoresearch_repo/train.py:102
     # x = F.relu(x).square()
-    h5_mlp_relu, h5_mlp__to_copy, _sqrelu_fwd_sq_5 = triton_squared_relu_fwd(h5_mlp_c_fc__unsafe_view)  # FUSED: squared ReLU forward via Triton
+    h5_mlp_relu, h5_mlp__to_copy, _sqrelu_fwd_sq_5 = cuda_sqrelu_fwd(h5_mlp_c_fc__unsafe_view)  # FUSED: squared ReLU forward via Triton
     h5_mlp_detach = h5_mlp_relu  # alias for backward saved tensor
     h5_mlp_pow = h5_mlp__to_copy  # alias (backward uses relu_fp32 directly)
 
@@ -1663,7 +1836,7 @@ def forward(
     # self.transformer.h.6.mlp (MLP)
     # /.autoresearch_repo/train.py:102
     # x = F.relu(x).square()
-    h6_mlp_relu, h6_mlp__to_copy, _sqrelu_fwd_sq_6 = triton_squared_relu_fwd(h6_mlp_c_fc__unsafe_view)  # FUSED: squared ReLU forward via Triton
+    h6_mlp_relu, h6_mlp__to_copy, _sqrelu_fwd_sq_6 = cuda_sqrelu_fwd(h6_mlp_c_fc__unsafe_view)  # FUSED: squared ReLU forward via Triton
     h6_mlp_detach = h6_mlp_relu  # alias for backward saved tensor
     h6_mlp_pow = h6_mlp__to_copy  # alias (backward uses relu_fp32 directly)
 
@@ -1817,7 +1990,7 @@ def forward(
     # self.transformer.h.7.mlp (MLP)
     # /.autoresearch_repo/train.py:102
     # x = F.relu(x).square()
-    h7_mlp_relu, h7_mlp__to_copy, _sqrelu_fwd_sq_7 = triton_squared_relu_fwd(h7_mlp_c_fc__unsafe_view)  # FUSED: squared ReLU forward via Triton
+    h7_mlp_relu, h7_mlp__to_copy, _sqrelu_fwd_sq_7 = cuda_sqrelu_fwd(h7_mlp_c_fc__unsafe_view)  # FUSED: squared ReLU forward via Triton
     h7_mlp_detach = h7_mlp_relu  # alias for backward saved tensor
     h7_mlp_pow = h7_mlp__to_copy  # alias (backward uses relu_fp32 directly)
 
@@ -2248,7 +2421,7 @@ def backward(
     # grad of self.transformer.h.7.mlp (MLP) → d_loss/d_mlp
     # /.autoresearch_repo/train.py:102
     # x = F.relu(x).square()
-    grad_h7_mlp_threshold_backward = triton_squared_relu_bwd(grad_h7_mlp_c_proj_view_1, _to_copy_65, detach_52)  # FUSED: squared ReLU backward via Triton
+    grad_h7_mlp_threshold_backward = cuda_sqrelu_bwd(grad_h7_mlp_c_proj_view_1, _to_copy_65, detach_52)  # FUSED: squared ReLU backward via Triton
 
     # grad of self.transformer.h.7.mlp.c_fc (Linear) → d_loss/d_c_fc
     # /.autoresearch_repo/train.py:101
@@ -2428,7 +2601,7 @@ def backward(
     # grad of self.transformer.h.6.mlp (MLP) → d_loss/d_mlp
     # /.autoresearch_repo/train.py:102
     # x = F.relu(x).square()
-    grad_h6_mlp_threshold_backward = triton_squared_relu_bwd(grad_h6_mlp_c_proj_view_1, _to_copy_56, detach_45)  # FUSED: squared ReLU backward via Triton
+    grad_h6_mlp_threshold_backward = cuda_sqrelu_bwd(grad_h6_mlp_c_proj_view_1, _to_copy_56, detach_45)  # FUSED: squared ReLU backward via Triton
 
     # grad of self.transformer.h.6.mlp.c_fc (Linear) → d_loss/d_c_fc
     # /.autoresearch_repo/train.py:101
@@ -2574,7 +2747,7 @@ def backward(
     # grad of self.transformer.h.5.mlp (MLP) → d_loss/d_mlp
     # /.autoresearch_repo/train.py:102
     # x = F.relu(x).square()
-    grad_h5_mlp_threshold_backward = triton_squared_relu_bwd(grad_h5_mlp_c_proj_view_1, _to_copy_48, detach_39)  # FUSED: squared ReLU backward via Triton
+    grad_h5_mlp_threshold_backward = cuda_sqrelu_bwd(grad_h5_mlp_c_proj_view_1, _to_copy_48, detach_39)  # FUSED: squared ReLU backward via Triton
 
     # grad of self.transformer.h.5.mlp.c_fc (Linear) → d_loss/d_c_fc
     # /.autoresearch_repo/train.py:101
@@ -2760,7 +2933,7 @@ def backward(
     # grad of self.transformer.h.4.mlp (MLP) → d_loss/d_mlp
     # /.autoresearch_repo/train.py:102
     # x = F.relu(x).square()
-    grad_h4_mlp_threshold_backward = triton_squared_relu_bwd(grad_h4_mlp_c_proj_view_1, _to_copy_39, detach_32)  # FUSED: squared ReLU backward via Triton
+    grad_h4_mlp_threshold_backward = cuda_sqrelu_bwd(grad_h4_mlp_c_proj_view_1, _to_copy_39, detach_32)  # FUSED: squared ReLU backward via Triton
 
     # grad of self.transformer.h.4.mlp.c_fc (Linear) → d_loss/d_c_fc
     # /.autoresearch_repo/train.py:101
@@ -2909,7 +3082,7 @@ def backward(
     # grad of self.transformer.h.3.mlp (MLP) → d_loss/d_mlp
     # /.autoresearch_repo/train.py:102
     # x = F.relu(x).square()
-    grad_h3_mlp_threshold_backward = triton_squared_relu_bwd(grad_h3_mlp_c_proj_view_1, _to_copy_31, detach_26)  # FUSED: squared ReLU backward via Triton
+    grad_h3_mlp_threshold_backward = cuda_sqrelu_bwd(grad_h3_mlp_c_proj_view_1, _to_copy_31, detach_26)  # FUSED: squared ReLU backward via Triton
 
     # grad of self.transformer.h.3.mlp.c_fc (Linear) → d_loss/d_c_fc
     # /.autoresearch_repo/train.py:101
@@ -3095,7 +3268,7 @@ def backward(
     # grad of self.transformer.h.2.mlp (MLP) → d_loss/d_mlp
     # /.autoresearch_repo/train.py:102
     # x = F.relu(x).square()
-    grad_h2_mlp_threshold_backward = triton_squared_relu_bwd(grad_h2_mlp_c_proj_view_1, _to_copy_22, detach_19)  # FUSED: squared ReLU backward via Triton
+    grad_h2_mlp_threshold_backward = cuda_sqrelu_bwd(grad_h2_mlp_c_proj_view_1, _to_copy_22, detach_19)  # FUSED: squared ReLU backward via Triton
 
     # grad of self.transformer.h.2.mlp.c_fc (Linear) → d_loss/d_c_fc
     # /.autoresearch_repo/train.py:101
@@ -3244,7 +3417,7 @@ def backward(
     # grad of self.transformer.h.1.mlp (MLP) → d_loss/d_mlp
     # /.autoresearch_repo/train.py:102
     # x = F.relu(x).square()
-    grad_h1_mlp_threshold_backward = triton_squared_relu_bwd(grad_h1_mlp_c_proj_view_1, _to_copy_14, detach_13)  # FUSED: squared ReLU backward via Triton
+    grad_h1_mlp_threshold_backward = cuda_sqrelu_bwd(grad_h1_mlp_c_proj_view_1, _to_copy_14, detach_13)  # FUSED: squared ReLU backward via Triton
 
     # grad of self.transformer.h.1.mlp.c_fc (Linear) → d_loss/d_c_fc
     # /.autoresearch_repo/train.py:101
@@ -3430,7 +3603,7 @@ def backward(
     # grad of self.transformer.h.0.mlp (MLP) → d_loss/d_mlp
     # /.autoresearch_repo/train.py:102
     # x = F.relu(x).square()
-    grad_h0_mlp_threshold_backward = triton_squared_relu_bwd(grad_h0_mlp_c_proj_view_1, _to_copy_5, detach_6)  # FUSED: squared ReLU backward via Triton
+    grad_h0_mlp_threshold_backward = cuda_sqrelu_bwd(grad_h0_mlp_c_proj_view_1, _to_copy_5, detach_6)  # FUSED: squared ReLU backward via Triton
 
     # grad of self.transformer.h.0.mlp.c_fc (Linear) → d_loss/d_c_fc
     # /.autoresearch_repo/train.py:101

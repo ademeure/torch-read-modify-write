@@ -8,7 +8,7 @@ KERNEL_SRC = r"""
 extern "C" __global__ void aten_prod(
     const float *input, float *output, unsigned int rows, unsigned int cols
 ) {
-    extern __shared__ float sdata[];
+    __shared__ float sdata[256];
     unsigned int row = blockIdx.x, tid = threadIdx.x;
     if (row >= rows) return;
     const float *ri = input + row * cols;
@@ -35,7 +35,6 @@ def init_once():
         "outputs": ["float32;n=%d" % rows],
         "grid": (rows,),
         "block": (256,),
-        "smem": 256 * 4,
         "atol": 0.01,
     }
 

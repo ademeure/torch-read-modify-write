@@ -1,4 +1,6 @@
-"""Reference CUDA kernel for aten.transpose — 2D transpose, contiguous output."""
+"""Reference CUDA kernel for aten.transpose — 2D transpose, contiguous output.
+Run: kbox iterate torch_graph/cuda_ref_kernels/aten_transpose.py --once
+"""
 import torch
 import numpy as np
 

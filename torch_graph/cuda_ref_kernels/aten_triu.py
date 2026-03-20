@@ -1,12 +1,32 @@
-"""Reference for aten.triu — PyTorch implementation.
+"""Reference CUDA kernel for aten.triu — upper triangle of a matrix.
 Run: kbox iterate torch_graph/cuda_ref_kernels/aten_triu.py --once
 """
 import torch
+import numpy as np
+
+KERNEL_SRC = r"""
+extern "C" __global__ void aten_triu_kernel(
+    const float *input, float *output, unsigned int rows, unsigned int cols, int diagonal
+) {
+    unsigned int idx = blockIdx.x * blockDim.x + threadIdx.x;
+    if (idx >= rows * cols) return;
+    unsigned int r = idx / cols, c = idx % cols;
+    output[idx] = ((int)c >= (int)r + diagonal) ? input[idx] : 0.0f;
+}
+"""
+
+N = 16
 
 def init_once():
-    x = torch.randn(16, 16, device='cuda')
-    return {"inputs": [x], "expected": [torch.ops.aten.triu.default(x)]}
+    x = torch.randn(N, N, device="cuda")
+    return {
+        "kernel_source": KERNEL_SRC, "inputs": [x],
+        "expected": [torch.ops.aten.triu.default(x)],
+    }
 
-def run(inputs):
-    x = inputs[0]
-    return [torch.ops.aten.triu.default(x)]
+def run(inputs, kernel):
+    n = inputs[0].size(0)
+    return [kernel(inputs[0], params=[
+        kernel.in_ptr(0), kernel.out_ptr(0),
+        np.uint32(n), np.uint32(n), np.int32(0),
+    ])]

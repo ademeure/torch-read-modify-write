@@ -1,4 +1,6 @@
-"""Reference CUDA kernel for aten.addcmul — input + value * t1 * t2."""
+"""Reference CUDA kernel for aten.addcmul — input + value * t1 * t2.
+Run: kbox iterate torch_graph/cuda_ref_kernels/aten_addcmul.py --once
+"""
 import torch
 import numpy as np
 

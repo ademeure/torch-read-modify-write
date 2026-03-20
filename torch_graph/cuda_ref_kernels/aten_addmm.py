@@ -1,4 +1,6 @@
-"""Reference CUDA kernel for aten.addmm — bias + A @ B."""
+"""Reference CUDA kernel for aten.addmm — bias + A @ B.
+Run: kbox iterate torch_graph/cuda_ref_kernels/aten_addmm.py --once
+"""
 import torch
 import numpy as np
 

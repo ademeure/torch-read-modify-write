@@ -1,4 +1,6 @@
-"""Reference CUDA kernel for aten.mm — naive nested loop matmul."""
+"""Reference CUDA kernel for aten.mm — naive nested loop matmul.
+Run: kbox iterate torch_graph/cuda_ref_kernels/aten_mm.py --once
+"""
 import torch
 import numpy as np
 

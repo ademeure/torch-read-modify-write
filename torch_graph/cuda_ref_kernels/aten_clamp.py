@@ -1,4 +1,6 @@
-"""Reference CUDA kernel for aten.clamp — clamp to [min, max] range."""
+"""Reference CUDA kernel for aten.clamp — clamp to [min, max] range.
+Run: kbox iterate torch_graph/cuda_ref_kernels/aten_clamp.py --once
+"""
 import torch
 import numpy as np
 

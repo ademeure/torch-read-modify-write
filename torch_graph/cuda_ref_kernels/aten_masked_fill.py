@@ -1,4 +1,6 @@
-"""Reference CUDA kernel for aten.masked_fill — fill where mask is True."""
+"""Reference CUDA kernel for aten.masked_fill — fill where mask is True.
+Run: kbox iterate torch_graph/cuda_ref_kernels/aten_masked_fill.py --once
+"""
 import torch
 import numpy as np
 

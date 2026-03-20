@@ -1,4 +1,6 @@
-"""Reference CUDA kernel for aten.bmm — batched matmul."""
+"""Reference CUDA kernel for aten.bmm — batched matmul.
+Run: kbox iterate torch_graph/cuda_ref_kernels/aten_bmm.py --once
+"""
 import torch
 import numpy as np
 

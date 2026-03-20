@@ -1,4 +1,6 @@
-"""Reference CUDA kernel for aten.t — 2D matrix transpose."""
+"""Reference CUDA kernel for aten.t — 2D matrix transpose.
+Run: kbox iterate torch_graph/cuda_ref_kernels/aten_t.py --once
+"""
 import torch
 import numpy as np
 

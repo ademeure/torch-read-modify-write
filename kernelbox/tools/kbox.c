@@ -137,17 +137,19 @@ static void print_main_help(void) {
         "KernelBox %s — GPU kernel iteration and task evaluation\n\n"
         "Usage:\n"
         "  kbox iterate <test_file.py> [options]\n"
+        "  kbox batch <directory> [options]\n"
         "  kbox mcp\n"
         "  kbox <test_file.py> [options]\n"
         "  kbox version\n\n"
         "Commands:\n"
         "  iterate   Run the hot-reload iterate workflow\n"
+        "  batch     Run all test files in a directory (single process, fast)\n"
         "  mcp       Run the MCP task server on stdio\n"
         "  version   Print version\n\n"
         "Examples:\n"
         "  kbox iterate examples/dev/test_scale.py\n"
-        "  kbox iterate examples/dev/test_mlp_suite.py --once\n"
-        "  kbox iterate examples/dev/test_kernel_mode_cuda.py --once --bench --isolated-kernel-benchmark\n"
+        "  kbox iterate examples/dev/test_scale.py --once\n"
+        "  kbox batch torch_graph/cuda_ref_kernels/\n"
         "  kbox mcp\n"
         "  kbox examples/dev/test_triton_add.py --once\n",
         VERSION);
@@ -205,6 +207,9 @@ int main(int argc, char **argv) {
 
     if (strcmp(argv[1], "iterate") == 0)
         return exec_script("kbox_iterate.py", argc, argv, 2);
+
+    if (strcmp(argv[1], "batch") == 0)
+        return exec_script("kbox_batch.py", argc, argv, 2);
 
     if (strcmp(argv[1], "mcp") == 0)
         return exec_script("kbox_mcp.py", argc, argv, 2);

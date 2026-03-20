@@ -1,4 +1,6 @@
-"""Reference CUDA kernel for aten.lerp — linear interpolation."""
+"""Reference CUDA kernel for aten.lerp — linear interpolation.
+Run: kbox iterate torch_graph/cuda_ref_kernels/aten_lerp.py --once
+"""
 import torch
 
 KERNEL_SRC = r"""

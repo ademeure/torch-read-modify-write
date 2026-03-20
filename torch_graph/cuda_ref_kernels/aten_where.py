@@ -1,4 +1,6 @@
-"""Reference CUDA kernel for aten.where — elementwise conditional select."""
+"""Reference CUDA kernel for aten.where — elementwise conditional select.
+Run: kbox iterate torch_graph/cuda_ref_kernels/aten_where.py --once
+"""
 import torch
 
 KERNEL_SRC = r"""

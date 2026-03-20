@@ -2460,6 +2460,7 @@ def _detect_unique_groups(
     *,
     max_depth: int = -1,
     min_ops: int = 0,
+    strategy: str = "module",
 ) -> list[_UniqueGroup]:
     """Detect repeated structurally-identical module groups, with hierarchical fallback.
 
@@ -2471,10 +2472,16 @@ def _detect_unique_groups(
     Supports *partial* matching: if only a subset of instances share a
     signature (e.g. even vs odd layers), each subset becomes its own group.
 
+    When *strategy* is ``"both_nested"``, sub-modules are extracted FIRST
+    (deepest → shallowest), then top-level groups from remaining nodes.
+    This maximizes sharing across different block variants.
+
     Returns a list of ``_UniqueGroup`` objects for groups with 2+ identical
     instances.
     """
     from collections import defaultdict
+
+    is_nested = strategy == "both_nested"
 
     # Phase 1: Group nodes by ALL template levels (multi-depth)
     all_templates: dict[str, dict[str, list[Node]]] = {}  # template -> {idx -> [nodes]}
@@ -2487,24 +2494,36 @@ def _detect_unique_groups(
             if template not in all_types:
                 all_types[template] = mod_type
 
-    # Sort templates by depth (shallowest first) so top-level groups are tried
-    # before sub-module groups.  Ties broken alphabetically for determinism.
-    sorted_templates = sorted(all_templates.keys(), key=lambda t: (t.count("."), t))
+    # Sort templates by depth
+    if is_nested:
+        # both_nested: deepest first (extract leaf functions), then shallowest
+        sorted_templates = sorted(all_templates.keys(), key=lambda t: (-t.count("."), t))
+    else:
+        # Normal: shallowest first so top-level groups are tried first
+        sorted_templates = sorted(all_templates.keys(), key=lambda t: (t.count("."), t))
 
     # Compute depth limit from max_depth (relative to shallowest template)
-    if max_depth > 0 and sorted_templates:
-        base_depth = sorted_templates[0].count(".")
-        depth_limit = base_depth + max_depth - 1
+    all_depths = [t.count(".") for t in all_templates] if all_templates else []
+    min_depth = min(all_depths) if all_depths else 0
+
+    if max_depth > 0:
+        depth_limit = min_depth + max_depth - 1
     else:
         depth_limit = None  # no limit
 
     groups: list[_UniqueGroup] = []
-    extracted_nodes: set[str] = set()  # nodes already in a group — skip at deeper levels
+    extracted_nodes: set[str] = set()  # nodes already in a group — skip at other levels
 
     for template in sorted_templates:
-        # Enforce depth limit
-        if depth_limit is not None and template.count(".") > depth_limit:
-            continue
+        # Enforce depth limit (for both_nested, depth_limit only restricts top-level)
+        tmpl_depth = template.count(".")
+        if depth_limit is not None:
+            if is_nested:
+                # Skip only if this is a top-level template beyond the limit
+                # (leaf templates at deeper levels are always allowed)
+                pass  # no restriction for nested — we process all depths
+            elif tmpl_depth > depth_limit:
+                continue
 
         raw_instances = all_templates[template]
 
@@ -2654,6 +2673,7 @@ def export_graph_to_python(
     uniquify: bool = False,
     uniquify_depth: int = -1,
     uniquify_min_ops: int = 0,
+    uniquify_strategy: str = "module",
     _unique_fn_defs: list[str] | None = None,
     _unique_groups: list | None = None,
 ) -> str:
@@ -2777,6 +2797,7 @@ def export_graph_to_python(
         unique_groups = _detect_unique_groups(
             compute_nodes, ir_nodes_by_name, name_remap, source_map, is_backward,
             max_depth=uniquify_depth, min_ops=uniquify_min_ops,
+            strategy=uniquify_strategy,
         )
         for group in unique_groups:
             if _unique_fn_defs is not None:
@@ -3097,6 +3118,7 @@ def export_aten_program(
     uniquify: bool = True,
     uniquify_depth: int = -1,
     uniquify_min_ops: int = 0,
+    uniquify_strategy: str = "module",
     emit_cuda_stubs: bool = False,
 ) -> Path:
     """Export full forward+backward as a standalone Python program.
@@ -3175,6 +3197,7 @@ def export_aten_program(
             uniquify=uniquify,
             uniquify_depth=uniquify_depth,
             uniquify_min_ops=uniquify_min_ops,
+            uniquify_strategy=uniquify_strategy,
             _unique_fn_defs=unique_fn_defs,
             _unique_groups=unique_groups_out,
         )
@@ -3195,6 +3218,7 @@ def export_aten_program(
             uniquify=uniquify,
             uniquify_depth=uniquify_depth,
             uniquify_min_ops=uniquify_min_ops,
+            uniquify_strategy=uniquify_strategy,
             _unique_fn_defs=bw_unique_fn_defs,
         )
 

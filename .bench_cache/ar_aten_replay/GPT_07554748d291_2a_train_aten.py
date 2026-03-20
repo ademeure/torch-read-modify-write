@@ -2226,7 +2226,8 @@ def backward(
     grad_h7_attn_c_k_t_2: 'bfloat16[512, 512]' = aten.t(t_46)  # strides=(512, 1), contiguous=True, view=True
     grad_h7_attn_c_k_mm_1: 'bfloat16[65536, 512]' = aten.mm(grad_h7_attn_c_k_view, grad_h7_attn_c_k_t_2)  # strides=(512, 1), contiguous=True, view=False
     grad_h7_attn_c_k_view_1: 'bfloat16[32, 2048, 512]' = aten.view(grad_h7_attn_c_k_mm_1, [32, 2048, 512])  # strides=(1048576, 512, 1), contiguous=True, view=True
-    add_74: 'bfloat16[32, 2048, 512]' = aten.add.Tensor(add_73, grad_h7_attn_c_k_view_1)  # strides=(1048576, 512, 1), contiguous=True, view=False
+    add_73.add_(grad_h7_attn_c_k_view_1)  # in-place grad accumulation
+    add_74 = add_73  # strides=(1048576, 512, 1), contiguous=True, view=False
     grad_h7_attn_c_k_t_3: 'bfloat16[512, 512]' = aten.t(grad_h7_attn_c_k_t_1)  # strides=(512, 1), contiguous=True, view=True
     grad_h7_attn_c_k__to_copy: 'float32[512, 512]' = aten._to_copy(grad_h7_attn_c_k_t_3, dtype=torch.float32, layout=torch.strided, device=torch.device('cuda:0'))  # strides=(512, 1), contiguous=True, view=False
 
@@ -2245,7 +2246,8 @@ def backward(
     grad_h7_attn_c_q_t_2: 'bfloat16[512, 512]' = aten.t(t_45)  # strides=(512, 1), contiguous=True, view=True
     grad_h7_attn_c_q_mm_1: 'bfloat16[65536, 512]' = aten.mm(grad_h7_attn_c_q_view, grad_h7_attn_c_q_t_2)  # strides=(512, 1), contiguous=True, view=False
     grad_h7_attn_c_q_view_1: 'bfloat16[32, 2048, 512]' = aten.view(grad_h7_attn_c_q_mm_1, [32, 2048, 512])  # strides=(1048576, 512, 1), contiguous=True, view=True
-    add_75: 'bfloat16[32, 2048, 512]' = aten.add.Tensor(add_74, grad_h7_attn_c_q_view_1)  # strides=(1048576, 512, 1), contiguous=True, view=False
+    add_74.add_(grad_h7_attn_c_q_view_1)  # in-place grad accumulation
+    add_75 = add_74  # strides=(1048576, 512, 1), contiguous=True, view=False
     grad_h7_attn_c_q_t_3: 'bfloat16[512, 512]' = aten.t(grad_h7_attn_c_q_t_1)  # strides=(512, 1), contiguous=True, view=True
     grad_h7_attn_c_q__to_copy: 'float32[512, 512]' = aten._to_copy(grad_h7_attn_c_q_t_3, dtype=torch.float32, layout=torch.strided, device=torch.device('cuda:0'))  # strides=(512, 1), contiguous=True, view=False
 
@@ -2403,7 +2405,8 @@ def backward(
     grad_h6_attn_c_q_t_2: 'bfloat16[512, 512]' = aten.t(t_39)  # strides=(512, 1), contiguous=True, view=True
     grad_h6_attn_c_q_mm_1: 'bfloat16[65536, 512]' = aten.mm(grad_h6_attn_c_q_view, grad_h6_attn_c_q_t_2)  # strides=(512, 1), contiguous=True, view=False
     grad_h6_attn_c_q_view_1: 'bfloat16[32, 2048, 512]' = aten.view(grad_h6_attn_c_q_mm_1, [32, 2048, 512])  # strides=(1048576, 512, 1), contiguous=True, view=True
-    add_85: 'bfloat16[32, 2048, 512]' = aten.add.Tensor(add_84, grad_h6_attn_c_q_view_1)  # strides=(1048576, 512, 1), contiguous=True, view=False
+    add_84.add_(grad_h6_attn_c_q_view_1)  # in-place grad accumulation
+    add_85 = add_84  # strides=(1048576, 512, 1), contiguous=True, view=False
     grad_h6_attn_c_q_t_3: 'bfloat16[512, 512]' = aten.t(grad_h6_attn_c_q_t_1)  # strides=(512, 1), contiguous=True, view=True
     grad_h6_attn_c_q__to_copy: 'float32[512, 512]' = aten._to_copy(grad_h6_attn_c_q_t_3, dtype=torch.float32, layout=torch.strided, device=torch.device('cuda:0'))  # strides=(512, 1), contiguous=True, view=False
 
@@ -2564,7 +2567,8 @@ def backward(
     grad_h5_attn_c_k_t_2: 'bfloat16[512, 512]' = aten.t(t_33)  # strides=(512, 1), contiguous=True, view=True
     grad_h5_attn_c_k_mm_1: 'bfloat16[65536, 512]' = aten.mm(grad_h5_attn_c_k_view, grad_h5_attn_c_k_t_2)  # strides=(512, 1), contiguous=True, view=False
     grad_h5_attn_c_k_view_1: 'bfloat16[32, 2048, 512]' = aten.view(grad_h5_attn_c_k_mm_1, [32, 2048, 512])  # strides=(1048576, 512, 1), contiguous=True, view=True
-    add_98: 'bfloat16[32, 2048, 512]' = aten.add.Tensor(add_97, grad_h5_attn_c_k_view_1)  # strides=(1048576, 512, 1), contiguous=True, view=False
+    add_97.add_(grad_h5_attn_c_k_view_1)  # in-place grad accumulation
+    add_98 = add_97  # strides=(1048576, 512, 1), contiguous=True, view=False
     grad_h5_attn_c_k_t_3: 'bfloat16[512, 512]' = aten.t(grad_h5_attn_c_k_t_1)  # strides=(512, 1), contiguous=True, view=True
     grad_h5_attn_c_k__to_copy: 'float32[512, 512]' = aten._to_copy(grad_h5_attn_c_k_t_3, dtype=torch.float32, layout=torch.strided, device=torch.device('cuda:0'))  # strides=(512, 1), contiguous=True, view=False
 
@@ -2583,7 +2587,8 @@ def backward(
     grad_h5_attn_c_q_t_2: 'bfloat16[512, 512]' = aten.t(t_32)  # strides=(512, 1), contiguous=True, view=True
     grad_h5_attn_c_q_mm_1: 'bfloat16[65536, 512]' = aten.mm(grad_h5_attn_c_q_view, grad_h5_attn_c_q_t_2)  # strides=(512, 1), contiguous=True, view=False
     grad_h5_attn_c_q_view_1: 'bfloat16[32, 2048, 512]' = aten.view(grad_h5_attn_c_q_mm_1, [32, 2048, 512])  # strides=(1048576, 512, 1), contiguous=True, view=True
-    add_99: 'bfloat16[32, 2048, 512]' = aten.add.Tensor(add_98, grad_h5_attn_c_q_view_1)  # strides=(1048576, 512, 1), contiguous=True, view=False
+    add_98.add_(grad_h5_attn_c_q_view_1)  # in-place grad accumulation
+    add_99 = add_98  # strides=(1048576, 512, 1), contiguous=True, view=False
     grad_h5_attn_c_q_t_3: 'bfloat16[512, 512]' = aten.t(grad_h5_attn_c_q_t_1)  # strides=(512, 1), contiguous=True, view=True
     grad_h5_attn_c_q__to_copy: 'float32[512, 512]' = aten._to_copy(grad_h5_attn_c_q_t_3, dtype=torch.float32, layout=torch.strided, device=torch.device('cuda:0'))  # strides=(512, 1), contiguous=True, view=False
 
@@ -2609,14 +2614,17 @@ def backward(
     grad_mul_55_mul: 'bfloat16[32, 2048, 512]' = aten.mul.Tensor(add_100, select_11)  # strides=(1048576, 512, 1), contiguous=True, view=False
     grad_mul_55_mul_1: 'bfloat16[32, 2048, 512]' = aten.mul.Tensor(add_100, getitem)  # strides=(1048576, 512, 1), contiguous=True, view=False
     grad_mul_55_sum: 'float32[]' = aten.sum(grad_mul_55_mul_1, dtype=torch.float32)  # strides=(), contiguous=True, view=False
-    add_101: 'bfloat16[32, 2048, 512]' = aten.add.Tensor(add_87, grad_mul_55_mul)  # strides=(1048576, 512, 1), contiguous=True, view=False
+    add_87.add_(grad_mul_55_mul)  # in-place grad accumulation
+    add_101 = add_87  # strides=(1048576, 512, 1), contiguous=True, view=False
     grad_getitem_35_select_backward: 'float32[8]' = aten.select_backward(grad_mul_55_sum, [8], 0, 5)  # strides=(1,), contiguous=True, view=False
-    add_102: 'float32[8]' = aten.add.Tensor(add_88, grad_getitem_35_select_backward)  # strides=(1,), contiguous=True, view=False
+    add_88.add_(grad_getitem_35_select_backward)  # in-place grad accumulation
+    add_102 = add_88  # strides=(1,), contiguous=True, view=False
     grad_mul_54_mul: 'bfloat16[32, 2048, 512]' = aten.mul.Tensor(add_100, select_10)  # strides=(1048576, 512, 1), contiguous=True, view=False
     grad_mul_54_mul_1: 'bfloat16[32, 2048, 512]' = aten.mul.Tensor(add_100, add_40)  # strides=(1048576, 512, 1), contiguous=True, view=False
     grad_mul_54_sum: 'float32[]' = aten.sum(grad_mul_54_mul_1, dtype=torch.float32)  # strides=(), contiguous=True, view=False
     grad_getitem_34_select_backward: 'float32[8]' = aten.select_backward(grad_mul_54_sum, [8], 0, 5)  # strides=(1,), contiguous=True, view=False
-    add_103: 'float32[8]' = aten.add.Tensor(add_89, grad_getitem_34_select_backward)  # strides=(1,), contiguous=True, view=False
+    add_89.add_(grad_getitem_34_select_backward)  # in-place grad accumulation
+    add_103 = add_89  # strides=(1,), contiguous=True, view=False
 
     # ════════════════════════════════════════════════════════════════
     # self.transformer.h.4
@@ -2744,7 +2752,8 @@ def backward(
     grad_h4_attn_c_q_t_2: 'bfloat16[512, 512]' = aten.t(t_26)  # strides=(512, 1), contiguous=True, view=True
     grad_h4_attn_c_q_mm_1: 'bfloat16[65536, 512]' = aten.mm(grad_h4_attn_c_q_view, grad_h4_attn_c_q_t_2)  # strides=(512, 1), contiguous=True, view=False
     grad_h4_attn_c_q_view_1: 'bfloat16[32, 2048, 512]' = aten.view(grad_h4_attn_c_q_mm_1, [32, 2048, 512])  # strides=(1048576, 512, 1), contiguous=True, view=True
-    add_112: 'bfloat16[32, 2048, 512]' = aten.add.Tensor(add_111, grad_h4_attn_c_q_view_1)  # strides=(1048576, 512, 1), contiguous=True, view=False
+    add_111.add_(grad_h4_attn_c_q_view_1)  # in-place grad accumulation
+    add_112 = add_111  # strides=(1048576, 512, 1), contiguous=True, view=False
     grad_h4_attn_c_q_t_3: 'bfloat16[512, 512]' = aten.t(grad_h4_attn_c_q_t_1)  # strides=(512, 1), contiguous=True, view=True
     grad_h4_attn_c_q__to_copy: 'float32[512, 512]' = aten._to_copy(grad_h4_attn_c_q_t_3, dtype=torch.float32, layout=torch.strided, device=torch.device('cuda:0'))  # strides=(512, 1), contiguous=True, view=False
 
@@ -2761,14 +2770,17 @@ def backward(
     grad_mul_45_mul: 'bfloat16[32, 2048, 512]' = aten.mul.Tensor(add_113, select_9)  # strides=(1048576, 512, 1), contiguous=True, view=False
     grad_mul_45_mul_1: 'bfloat16[32, 2048, 512]' = aten.mul.Tensor(add_113, getitem)  # strides=(1048576, 512, 1), contiguous=True, view=False
     grad_mul_45_sum: 'float32[]' = aten.sum(grad_mul_45_mul_1, dtype=torch.float32)  # strides=(), contiguous=True, view=False
-    add_114: 'bfloat16[32, 2048, 512]' = aten.add.Tensor(add_101, grad_mul_45_mul)  # strides=(1048576, 512, 1), contiguous=True, view=False
+    add_101.add_(grad_mul_45_mul)  # in-place grad accumulation
+    add_114 = add_101  # strides=(1048576, 512, 1), contiguous=True, view=False
     grad_getitem_29_select_backward: 'float32[8]' = aten.select_backward(grad_mul_45_sum, [8], 0, 4)  # strides=(1,), contiguous=True, view=False
-    add_115: 'float32[8]' = aten.add.Tensor(add_102, grad_getitem_29_select_backward)  # strides=(1,), contiguous=True, view=False
+    add_102.add_(grad_getitem_29_select_backward)  # in-place grad accumulation
+    add_115 = add_102  # strides=(1,), contiguous=True, view=False
     grad_mul_44_mul: 'bfloat16[32, 2048, 512]' = aten.mul.Tensor(add_113, select_8)  # strides=(1048576, 512, 1), contiguous=True, view=False
     grad_mul_44_mul_1: 'bfloat16[32, 2048, 512]' = aten.mul.Tensor(add_113, add_32)  # strides=(1048576, 512, 1), contiguous=True, view=False
     grad_mul_44_sum: 'float32[]' = aten.sum(grad_mul_44_mul_1, dtype=torch.float32)  # strides=(), contiguous=True, view=False
     grad_getitem_28_select_backward: 'float32[8]' = aten.select_backward(grad_mul_44_sum, [8], 0, 4)  # strides=(1,), contiguous=True, view=False
-    add_116: 'float32[8]' = aten.add.Tensor(add_103, grad_getitem_28_select_backward)  # strides=(1,), contiguous=True, view=False
+    add_103.add_(grad_getitem_28_select_backward)  # in-place grad accumulation
+    add_116 = add_103  # strides=(1,), contiguous=True, view=False
 
     # ════════════════════════════════════════════════════════════════
     # self.transformer.h.3
@@ -2905,7 +2917,8 @@ def backward(
     grad_h3_attn_c_k_t_2: 'bfloat16[512, 512]' = aten.t(t_20)  # strides=(512, 1), contiguous=True, view=True
     grad_h3_attn_c_k_mm_1: 'bfloat16[65536, 512]' = aten.mm(grad_h3_attn_c_k_view, grad_h3_attn_c_k_t_2)  # strides=(512, 1), contiguous=True, view=False
     grad_h3_attn_c_k_view_1: 'bfloat16[32, 2048, 512]' = aten.view(grad_h3_attn_c_k_mm_1, [32, 2048, 512])  # strides=(1048576, 512, 1), contiguous=True, view=True
-    add_125: 'bfloat16[32, 2048, 512]' = aten.add.Tensor(add_124, grad_h3_attn_c_k_view_1)  # strides=(1048576, 512, 1), contiguous=True, view=False
+    add_124.add_(grad_h3_attn_c_k_view_1)  # in-place grad accumulation
+    add_125 = add_124  # strides=(1048576, 512, 1), contiguous=True, view=False
     grad_h3_attn_c_k_t_3: 'bfloat16[512, 512]' = aten.t(grad_h3_attn_c_k_t_1)  # strides=(512, 1), contiguous=True, view=True
     grad_h3_attn_c_k__to_copy: 'float32[512, 512]' = aten._to_copy(grad_h3_attn_c_k_t_3, dtype=torch.float32, layout=torch.strided, device=torch.device('cuda:0'))  # strides=(512, 1), contiguous=True, view=False
 
@@ -2924,7 +2937,8 @@ def backward(
     grad_h3_attn_c_q_t_2: 'bfloat16[512, 512]' = aten.t(t_19)  # strides=(512, 1), contiguous=True, view=True
     grad_h3_attn_c_q_mm_1: 'bfloat16[65536, 512]' = aten.mm(grad_h3_attn_c_q_view, grad_h3_attn_c_q_t_2)  # strides=(512, 1), contiguous=True, view=False
     grad_h3_attn_c_q_view_1: 'bfloat16[32, 2048, 512]' = aten.view(grad_h3_attn_c_q_mm_1, [32, 2048, 512])  # strides=(1048576, 512, 1), contiguous=True, view=True
-    add_126: 'bfloat16[32, 2048, 512]' = aten.add.Tensor(add_125, grad_h3_attn_c_q_view_1)  # strides=(1048576, 512, 1), contiguous=True, view=False
+    add_125.add_(grad_h3_attn_c_q_view_1)  # in-place grad accumulation
+    add_126 = add_125  # strides=(1048576, 512, 1), contiguous=True, view=False
     grad_h3_attn_c_q_t_3: 'bfloat16[512, 512]' = aten.t(grad_h3_attn_c_q_t_1)  # strides=(512, 1), contiguous=True, view=True
     grad_h3_attn_c_q__to_copy: 'float32[512, 512]' = aten._to_copy(grad_h3_attn_c_q_t_3, dtype=torch.float32, layout=torch.strided, device=torch.device('cuda:0'))  # strides=(512, 1), contiguous=True, view=False
 
@@ -2950,14 +2964,17 @@ def backward(
     grad_mul_33_mul: 'bfloat16[32, 2048, 512]' = aten.mul.Tensor(add_127, select_7)  # strides=(1048576, 512, 1), contiguous=True, view=False
     grad_mul_33_mul_1: 'bfloat16[32, 2048, 512]' = aten.mul.Tensor(add_127, getitem)  # strides=(1048576, 512, 1), contiguous=True, view=False
     grad_mul_33_sum: 'float32[]' = aten.sum(grad_mul_33_mul_1, dtype=torch.float32)  # strides=(), contiguous=True, view=False
-    add_128: 'bfloat16[32, 2048, 512]' = aten.add.Tensor(add_114, grad_mul_33_mul)  # strides=(1048576, 512, 1), contiguous=True, view=False
+    add_114.add_(grad_mul_33_mul)  # in-place grad accumulation
+    add_128 = add_114  # strides=(1048576, 512, 1), contiguous=True, view=False
     grad_getitem_22_select_backward: 'float32[8]' = aten.select_backward(grad_mul_33_sum, [8], 0, 3)  # strides=(1,), contiguous=True, view=False
-    add_129: 'float32[8]' = aten.add.Tensor(add_115, grad_getitem_22_select_backward)  # strides=(1,), contiguous=True, view=False
+    add_115.add_(grad_getitem_22_select_backward)  # in-place grad accumulation
+    add_129 = add_115  # strides=(1,), contiguous=True, view=False
     grad_mul_32_mul: 'bfloat16[32, 2048, 512]' = aten.mul.Tensor(add_127, select_6)  # strides=(1048576, 512, 1), contiguous=True, view=False
     grad_mul_32_mul_1: 'bfloat16[32, 2048, 512]' = aten.mul.Tensor(add_127, add_24)  # strides=(1048576, 512, 1), contiguous=True, view=False
     grad_mul_32_sum: 'float32[]' = aten.sum(grad_mul_32_mul_1, dtype=torch.float32)  # strides=(), contiguous=True, view=False
     grad_getitem_21_select_backward: 'float32[8]' = aten.select_backward(grad_mul_32_sum, [8], 0, 3)  # strides=(1,), contiguous=True, view=False
-    add_130: 'float32[8]' = aten.add.Tensor(add_116, grad_getitem_21_select_backward)  # strides=(1,), contiguous=True, view=False
+    add_116.add_(grad_getitem_21_select_backward)  # in-place grad accumulation
+    add_130 = add_116  # strides=(1,), contiguous=True, view=False
 
     # ════════════════════════════════════════════════════════════════
     # self.transformer.h.2
@@ -3085,7 +3102,8 @@ def backward(
     grad_h2_attn_c_q_t_2: 'bfloat16[512, 512]' = aten.t(t_13)  # strides=(512, 1), contiguous=True, view=True
     grad_h2_attn_c_q_mm_1: 'bfloat16[65536, 512]' = aten.mm(grad_h2_attn_c_q_view, grad_h2_attn_c_q_t_2)  # strides=(512, 1), contiguous=True, view=False
     grad_h2_attn_c_q_view_1: 'bfloat16[32, 2048, 512]' = aten.view(grad_h2_attn_c_q_mm_1, [32, 2048, 512])  # strides=(1048576, 512, 1), contiguous=True, view=True
-    add_139: 'bfloat16[32, 2048, 512]' = aten.add.Tensor(add_138, grad_h2_attn_c_q_view_1)  # strides=(1048576, 512, 1), contiguous=True, view=False
+    add_138.add_(grad_h2_attn_c_q_view_1)  # in-place grad accumulation
+    add_139 = add_138  # strides=(1048576, 512, 1), contiguous=True, view=False
     grad_h2_attn_c_q_t_3: 'bfloat16[512, 512]' = aten.t(grad_h2_attn_c_q_t_1)  # strides=(512, 1), contiguous=True, view=True
     grad_h2_attn_c_q__to_copy: 'float32[512, 512]' = aten._to_copy(grad_h2_attn_c_q_t_3, dtype=torch.float32, layout=torch.strided, device=torch.device('cuda:0'))  # strides=(512, 1), contiguous=True, view=False
 
@@ -3102,14 +3120,17 @@ def backward(
     grad_mul_23_mul: 'bfloat16[32, 2048, 512]' = aten.mul.Tensor(add_140, select_5)  # strides=(1048576, 512, 1), contiguous=True, view=False
     grad_mul_23_mul_1: 'bfloat16[32, 2048, 512]' = aten.mul.Tensor(add_140, getitem)  # strides=(1048576, 512, 1), contiguous=True, view=False
     grad_mul_23_sum: 'float32[]' = aten.sum(grad_mul_23_mul_1, dtype=torch.float32)  # strides=(), contiguous=True, view=False
-    add_141: 'bfloat16[32, 2048, 512]' = aten.add.Tensor(add_128, grad_mul_23_mul)  # strides=(1048576, 512, 1), contiguous=True, view=False
+    add_128.add_(grad_mul_23_mul)  # in-place grad accumulation
+    add_141 = add_128  # strides=(1048576, 512, 1), contiguous=True, view=False
     grad_getitem_16_select_backward: 'float32[8]' = aten.select_backward(grad_mul_23_sum, [8], 0, 2)  # strides=(1,), contiguous=True, view=False
-    add_142: 'float32[8]' = aten.add.Tensor(add_129, grad_getitem_16_select_backward)  # strides=(1,), contiguous=True, view=False
+    add_129.add_(grad_getitem_16_select_backward)  # in-place grad accumulation
+    add_142 = add_129  # strides=(1,), contiguous=True, view=False
     grad_mul_22_mul: 'bfloat16[32, 2048, 512]' = aten.mul.Tensor(add_140, select_4)  # strides=(1048576, 512, 1), contiguous=True, view=False
     grad_mul_22_mul_1: 'bfloat16[32, 2048, 512]' = aten.mul.Tensor(add_140, add_16)  # strides=(1048576, 512, 1), contiguous=True, view=False
     grad_mul_22_sum: 'float32[]' = aten.sum(grad_mul_22_mul_1, dtype=torch.float32)  # strides=(), contiguous=True, view=False
     grad_getitem_15_select_backward: 'float32[8]' = aten.select_backward(grad_mul_22_sum, [8], 0, 2)  # strides=(1,), contiguous=True, view=False
-    add_143: 'float32[8]' = aten.add.Tensor(add_130, grad_getitem_15_select_backward)  # strides=(1,), contiguous=True, view=False
+    add_130.add_(grad_getitem_15_select_backward)  # in-place grad accumulation
+    add_143 = add_130  # strides=(1,), contiguous=True, view=False
 
     # ════════════════════════════════════════════════════════════════
     # self.transformer.h.1
@@ -3246,7 +3267,8 @@ def backward(
     grad_h1_attn_c_k_t_2: 'bfloat16[512, 512]' = aten.t(t_7)  # strides=(512, 1), contiguous=True, view=True
     grad_h1_attn_c_k_mm_1: 'bfloat16[65536, 512]' = aten.mm(grad_h1_attn_c_k_view, grad_h1_attn_c_k_t_2)  # strides=(512, 1), contiguous=True, view=False
     grad_h1_attn_c_k_view_1: 'bfloat16[32, 2048, 512]' = aten.view(grad_h1_attn_c_k_mm_1, [32, 2048, 512])  # strides=(1048576, 512, 1), contiguous=True, view=True
-    add_152: 'bfloat16[32, 2048, 512]' = aten.add.Tensor(add_151, grad_h1_attn_c_k_view_1)  # strides=(1048576, 512, 1), contiguous=True, view=False
+    add_151.add_(grad_h1_attn_c_k_view_1)  # in-place grad accumulation
+    add_152 = add_151  # strides=(1048576, 512, 1), contiguous=True, view=False
     grad_h1_attn_c_k_t_3: 'bfloat16[512, 512]' = aten.t(grad_h1_attn_c_k_t_1)  # strides=(512, 1), contiguous=True, view=True
     grad_h1_attn_c_k__to_copy: 'float32[512, 512]' = aten._to_copy(grad_h1_attn_c_k_t_3, dtype=torch.float32, layout=torch.strided, device=torch.device('cuda:0'))  # strides=(512, 1), contiguous=True, view=False
 
@@ -3265,7 +3287,8 @@ def backward(
     grad_h1_attn_c_q_t_2: 'bfloat16[512, 512]' = aten.t(t_6)  # strides=(512, 1), contiguous=True, view=True
     grad_h1_attn_c_q_mm_1: 'bfloat16[65536, 512]' = aten.mm(grad_h1_attn_c_q_view, grad_h1_attn_c_q_t_2)  # strides=(512, 1), contiguous=True, view=False
     grad_h1_attn_c_q_view_1: 'bfloat16[32, 2048, 512]' = aten.view(grad_h1_attn_c_q_mm_1, [32, 2048, 512])  # strides=(1048576, 512, 1), contiguous=True, view=True
-    add_153: 'bfloat16[32, 2048, 512]' = aten.add.Tensor(add_152, grad_h1_attn_c_q_view_1)  # strides=(1048576, 512, 1), contiguous=True, view=False
+    add_152.add_(grad_h1_attn_c_q_view_1)  # in-place grad accumulation
+    add_153 = add_152  # strides=(1048576, 512, 1), contiguous=True, view=False
     grad_h1_attn_c_q_t_3: 'bfloat16[512, 512]' = aten.t(grad_h1_attn_c_q_t_1)  # strides=(512, 1), contiguous=True, view=True
     grad_h1_attn_c_q__to_copy: 'float32[512, 512]' = aten._to_copy(grad_h1_attn_c_q_t_3, dtype=torch.float32, layout=torch.strided, device=torch.device('cuda:0'))  # strides=(512, 1), contiguous=True, view=False
 
@@ -3291,14 +3314,17 @@ def backward(
     grad_mul_11_mul: 'bfloat16[32, 2048, 512]' = aten.mul.Tensor(add_154, select_3)  # strides=(1048576, 512, 1), contiguous=True, view=False
     grad_mul_11_mul_1: 'bfloat16[32, 2048, 512]' = aten.mul.Tensor(add_154, getitem)  # strides=(1048576, 512, 1), contiguous=True, view=False
     grad_mul_11_sum: 'float32[]' = aten.sum(grad_mul_11_mul_1, dtype=torch.float32)  # strides=(), contiguous=True, view=False
-    add_155: 'bfloat16[32, 2048, 512]' = aten.add.Tensor(add_141, grad_mul_11_mul)  # strides=(1048576, 512, 1), contiguous=True, view=False
+    add_141.add_(grad_mul_11_mul)  # in-place grad accumulation
+    add_155 = add_141  # strides=(1048576, 512, 1), contiguous=True, view=False
     grad_getitem_9_select_backward: 'float32[8]' = aten.select_backward(grad_mul_11_sum, [8], 0, 1)  # strides=(1,), contiguous=True, view=False
-    add_156: 'float32[8]' = aten.add.Tensor(add_142, grad_getitem_9_select_backward)  # strides=(1,), contiguous=True, view=False
+    add_142.add_(grad_getitem_9_select_backward)  # in-place grad accumulation
+    add_156 = add_142  # strides=(1,), contiguous=True, view=False
     grad_mul_10_mul: 'bfloat16[32, 2048, 512]' = aten.mul.Tensor(add_154, select_2)  # strides=(1048576, 512, 1), contiguous=True, view=False
     grad_mul_10_mul_1: 'bfloat16[32, 2048, 512]' = aten.mul.Tensor(add_154, add_7)  # strides=(1048576, 512, 1), contiguous=True, view=False
     grad_mul_10_sum: 'float32[]' = aten.sum(grad_mul_10_mul_1, dtype=torch.float32)  # strides=(), contiguous=True, view=False
     grad_getitem_8_select_backward: 'float32[8]' = aten.select_backward(grad_mul_10_sum, [8], 0, 1)  # strides=(1,), contiguous=True, view=False
-    add_157: 'float32[8]' = aten.add.Tensor(add_143, grad_getitem_8_select_backward)  # strides=(1,), contiguous=True, view=False
+    add_143.add_(grad_getitem_8_select_backward)  # in-place grad accumulation
+    add_157 = add_143  # strides=(1,), contiguous=True, view=False
 
     # ════════════════════════════════════════════════════════════════
     # self.transformer.h.0
@@ -3436,7 +3462,8 @@ def backward(
     grad_h0_attn_c_q_t_2: 'bfloat16[512, 512]' = aten.t(t)  # strides=(512, 1), contiguous=True, view=True
     grad_h0_attn_c_q_mm_1: 'bfloat16[65536, 512]' = aten.mm(grad_h0_attn_c_q_view, grad_h0_attn_c_q_t_2)  # strides=(512, 1), contiguous=True, view=False
     grad_h0_attn_c_q_view_1: 'bfloat16[32, 2048, 512]' = aten.view(grad_h0_attn_c_q_mm_1, [32, 2048, 512])  # strides=(1048576, 512, 1), contiguous=True, view=True
-    add_166: 'bfloat16[32, 2048, 512]' = aten.add.Tensor(add_165, grad_h0_attn_c_q_view_1)  # strides=(1048576, 512, 1), contiguous=True, view=False
+    add_165.add_(grad_h0_attn_c_q_view_1)  # in-place grad accumulation
+    add_166 = add_165  # strides=(1048576, 512, 1), contiguous=True, view=False
     grad_h0_attn_c_q_t_3: 'bfloat16[512, 512]' = aten.t(grad_h0_attn_c_q_t_1)  # strides=(512, 1), contiguous=True, view=True
     grad_h0_attn_c_q__to_copy: 'float32[512, 512]' = aten._to_copy(grad_h0_attn_c_q_t_3, dtype=torch.float32, layout=torch.strided, device=torch.device('cuda:0'))  # strides=(512, 1), contiguous=True, view=False
 
@@ -3453,15 +3480,19 @@ def backward(
     grad_mul_1_mul: 'bfloat16[32, 2048, 512]' = aten.mul.Tensor(add_167, select_1)  # strides=(1048576, 512, 1), contiguous=True, view=False
     grad_mul_1_mul_1: 'bfloat16[32, 2048, 512]' = aten.mul.Tensor(add_167, getitem)  # strides=(1048576, 512, 1), contiguous=True, view=False
     grad_mul_1_sum: 'float32[]' = aten.sum(grad_mul_1_mul_1, dtype=torch.float32)  # strides=(), contiguous=True, view=False
-    add_168: 'bfloat16[32, 2048, 512]' = aten.add.Tensor(add_155, grad_mul_1_mul)  # strides=(1048576, 512, 1), contiguous=True, view=False
+    add_155.add_(grad_mul_1_mul)  # in-place grad accumulation
+    add_168 = add_155  # strides=(1048576, 512, 1), contiguous=True, view=False
     grad_getitem_3_select_backward: 'float32[8]' = aten.select_backward(grad_mul_1_sum, [8], 0, 0)  # strides=(1,), contiguous=True, view=False
-    add_169: 'float32[8]' = aten.add.Tensor(add_156, grad_getitem_3_select_backward)  # strides=(1,), contiguous=True, view=False
+    add_156.add_(grad_getitem_3_select_backward)  # in-place grad accumulation
+    add_169 = add_156  # strides=(1,), contiguous=True, view=False
     grad_mul_mul: 'bfloat16[32, 2048, 512]' = aten.mul.Tensor(add_167, select)  # strides=(1048576, 512, 1), contiguous=True, view=False
     grad_mul_mul_1: 'bfloat16[32, 2048, 512]' = aten.mul.Tensor(add_167, getitem)  # strides=(1048576, 512, 1), contiguous=True, view=False
     grad_mul_sum: 'float32[]' = aten.sum(grad_mul_mul_1, dtype=torch.float32)  # strides=(), contiguous=True, view=False
-    add_170: 'bfloat16[32, 2048, 512]' = aten.add.Tensor(add_168, grad_mul_mul)  # strides=(1048576, 512, 1), contiguous=True, view=False
+    add_168.add_(grad_mul_mul)  # in-place grad accumulation
+    add_170 = add_168  # strides=(1048576, 512, 1), contiguous=True, view=False
     grad_getitem_2_select_backward: 'float32[8]' = aten.select_backward(grad_mul_sum, [8], 0, 0)  # strides=(1,), contiguous=True, view=False
-    add_171: 'float32[8]' = aten.add.Tensor(add_157, grad_getitem_2_select_backward)  # strides=(1,), contiguous=True, view=False
+    add_157.add_(grad_getitem_2_select_backward)  # in-place grad accumulation
+    add_171 = add_157  # strides=(1,), contiguous=True, view=False
 
     # /.venv/lib/python3.12/site-packages/torch/nn/functional.py:2954
     # return torch.rms_norm(input, normalized_shape, weight, eps)

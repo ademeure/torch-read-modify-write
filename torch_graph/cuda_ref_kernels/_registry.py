@@ -1284,8 +1284,25 @@ _reg("ne_scalar", kernel=_unary("(x != 0.0f ? 1.0f : 0.0f)"),
      aten=lambda inp: [torch.ops.aten.ne.Scalar(inp[0], 0.0).float()])
 
 # More reductions
-_reg("var", kernel=_red_kernel("0.0f", "v += ri[j];", "sdata[tid] += sdata[tid+s];",
-     "({ float mean = sdata[0]/(float)cols; float var = 0.0f; for(unsigned int j=0;j<cols;j++){float d=ri[j]-mean;var+=d*d;} var/(float)(cols-1); })"),
+_VAR_KERNEL = '''extern "C" __global__ void k(
+    const float *input, float *output, unsigned int rows, unsigned int cols
+) {
+    __shared__ float s_sum[256], s_sq[256];
+    unsigned int row = blockIdx.x, tid = threadIdx.x;
+    if (row >= rows) return;
+    const float *ri = input + row * cols;
+    float ls = 0.0f, lsq = 0.0f;
+    for (unsigned int j = tid; j < cols; j += blockDim.x) { float v = ri[j]; ls += v; lsq += v*v; }
+    s_sum[tid] = ls; s_sq[tid] = lsq; __syncthreads();
+    for (unsigned int s = blockDim.x/2; s > 0; s >>= 1) {
+        if (tid < s) { s_sum[tid] += s_sum[tid+s]; s_sq[tid] += s_sq[tid+s]; } __syncthreads();
+    }
+    if (tid == 0) {
+        float mean = s_sum[0] / (float)cols;
+        output[row] = (s_sq[0] / (float)cols - mean * mean) * (float)cols / (float)(cols - 1);
+    }
+}'''
+_reg("var", kernel=_VAR_KERNEL,
      inputs=_2d, dims={"d0": 32, "d1": 64}, dispatch=_red_dispatch, atol=1e-3,
      aten=lambda inp: [torch.ops.aten.var.correction(inp[0], [-1])],
      outputs=lambda d: ["float32;n=%d" % d["d0"]], grid=lambda d: (d["d0"],), block=(256,))
@@ -1302,13 +1319,13 @@ _ARGMAX_KERNEL = '''extern "C" __global__ void k(
     output[row] = (float)best_idx;
 }'''
 
-_reg("argmax", kernel=_ARGMAX_KERNEL, inputs=_2d, dims={"d0": 32, "d1": 64},
+_reg("argmax", kernel=_ARGMAX_KERNEL, inputs=_sort_inputs, dims={"d0": 32, "d1": 64},
      aten=lambda inp: [torch.ops.aten.argmax.default(inp[0], -1).float()],
      dispatch=_red_dispatch,
      outputs=lambda d: ["float32;n=%d" % d["d0"]], grid=lambda d: (d["d0"],), block=(1,))
 
 _reg("argmin", kernel=_ARGMAX_KERNEL.replace("> best", "< best"),
-     inputs=_2d, dims={"d0": 32, "d1": 64},
+     inputs=_sort_inputs, dims={"d0": 32, "d1": 64},
      aten=lambda inp: [torch.ops.aten.argmin.default(inp[0], -1).float()],
      dispatch=_red_dispatch,
      outputs=lambda d: ["float32;n=%d" % d["d0"]], grid=lambda d: (d["d0"],), block=(1,))
@@ -1367,7 +1384,9 @@ _TOPK_KERNEL = '''extern "C" __global__ void k(
     }
 }'''
 
-_reg("topk", kernel=_TOPK_KERNEL, inputs=_2d, dims={"d0": 8, "d1": 32, "k": 5},
+_reg("topk", kernel=_TOPK_KERNEL,
+     inputs=lambda d, s: [_seeded((d["d0"], d["d1"]), max(s, 1))],
+     dims={"d0": 8, "d1": 32, "k": 5},
      aten=lambda inp: [torch.ops.aten.topk.default(inp[0], 5, -1)[0].flatten()],
      dispatch=lambda inp, k, d: [k(inp[0], params=[
          k.in_ptr(0), k.out_ptr(0),

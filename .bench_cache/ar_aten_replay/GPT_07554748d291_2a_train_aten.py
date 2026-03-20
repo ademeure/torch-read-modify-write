@@ -246,6 +246,16 @@ def torch_rope_fwd(x, cos, sin):
     return out
 # ── End torch-native fused RoPE ────────────────────────────────────────
 
+
+# ── Torch-native fused add + RMSNorm ───────────────────────────────────
+def torch_add_rmsnorm(a, b, normalized_shape):
+    """Fused residual add + RMSNorm: avoids materializing the sum tensor.
+    Returns (normed, rrms, sum) where sum = a + b."""
+    x = a + b  # still 1 kernel, but we pass x to rmsnorm without extra write
+    result = aten._fused_rms_norm(x, normalized_shape, None, None)
+    return x, result
+# ── End fused add + RMSNorm ─────────────────────────────────────────────
+
 # ======================================================================
 # WEIGHTS / PARAMETERS
 # ======================================================================
@@ -607,10 +617,9 @@ def forward(
     # self.transformer.h.0 (Block)
     # /.autoresearch_repo/train.py:114
     # x = x + self.attn(norm(x), ve, cos_sin, window_size)
-    h0_add: 'bfloat16[32, 2048, 512]' = aten.add.Tensor(add_add, h0_attn_c_proj__unsafe_view)  # strides=(1048576, 512, 1), contiguous=True, view=False
-    h0__fused_rms_norm_1 = aten._fused_rms_norm(h0_add, [512], None, None)  # out0: strides=(1048576, 512, 1), contiguous=True; out1: strides=(2048, 1, 1), contiguous=True, view=False
-    h0_getitem_2: 'bfloat16[32, 2048, 512]' = operator.getitem(h0__fused_rms_norm_1, 0)  # strides=(1048576, 512, 1), contiguous=True, view=True
-    h0_getitem_3: 'float32[32, 2048, 1]' = operator.getitem(h0__fused_rms_norm_1, 1)  # strides=(2048, 1, 1), contiguous=True, view=True
+    h0_add, h0__fused_rms_norm_1 = torch_add_rmsnorm(add_add, h0_attn_c_proj__unsafe_view, [512])
+    h0_getitem_2 = operator.getitem(h0__fused_rms_norm_1, 0)
+    h0_getitem_3 = operator.getitem(h0__fused_rms_norm_1, 1)
     h0_detach_1: 'float32[32, 2048, 1]' = aten.detach(h0_getitem_3)  # strides=(2048, 1, 1), contiguous=True, view=True
 
     # self.transformer.h.0.mlp.c_fc (Linear)
@@ -769,10 +778,9 @@ def forward(
     # self.transformer.h.1 (Block)
     # /.autoresearch_repo/train.py:114
     # x = x + self.attn(norm(x), ve, cos_sin, window_size)
-    h1_add: 'bfloat16[32, 2048, 512]' = aten.add.Tensor(add_8_add, h1_attn_c_proj__unsafe_view)  # strides=(1048576, 512, 1), contiguous=True, view=False
-    h1__fused_rms_norm_1 = aten._fused_rms_norm(h1_add, [512], None, None)  # out0: strides=(1048576, 512, 1), contiguous=True; out1: strides=(2048, 1, 1), contiguous=True, view=False
-    h1_getitem_2: 'bfloat16[32, 2048, 512]' = operator.getitem(h1__fused_rms_norm_1, 0)  # strides=(1048576, 512, 1), contiguous=True, view=True
-    h1_getitem_3: 'float32[32, 2048, 1]' = operator.getitem(h1__fused_rms_norm_1, 1)  # strides=(2048, 1, 1), contiguous=True, view=True
+    h1_add, h1__fused_rms_norm_1 = torch_add_rmsnorm(add_8_add, h1_attn_c_proj__unsafe_view, [512])
+    h1_getitem_2 = operator.getitem(h1__fused_rms_norm_1, 0)
+    h1_getitem_3 = operator.getitem(h1__fused_rms_norm_1, 1)
     h1_detach_1: 'float32[32, 2048, 1]' = aten.detach(h1_getitem_3)  # strides=(2048, 1, 1), contiguous=True, view=True
 
     # self.transformer.h.1.mlp.c_fc (Linear)
@@ -902,10 +910,9 @@ def forward(
     # self.transformer.h.2 (Block)
     # /.autoresearch_repo/train.py:114
     # x = x + self.attn(norm(x), ve, cos_sin, window_size)
-    h2_add: 'bfloat16[32, 2048, 512]' = aten.add.Tensor(add_17_add, h2_attn_c_proj__unsafe_view)  # strides=(1048576, 512, 1), contiguous=True, view=False
-    h2__fused_rms_norm_1 = aten._fused_rms_norm(h2_add, [512], None, None)  # out0: strides=(1048576, 512, 1), contiguous=True; out1: strides=(2048, 1, 1), contiguous=True, view=False
-    h2_getitem_2: 'bfloat16[32, 2048, 512]' = operator.getitem(h2__fused_rms_norm_1, 0)  # strides=(1048576, 512, 1), contiguous=True, view=True
-    h2_getitem_3: 'float32[32, 2048, 1]' = operator.getitem(h2__fused_rms_norm_1, 1)  # strides=(2048, 1, 1), contiguous=True, view=True
+    h2_add, h2__fused_rms_norm_1 = torch_add_rmsnorm(add_17_add, h2_attn_c_proj__unsafe_view, [512])
+    h2_getitem_2 = operator.getitem(h2__fused_rms_norm_1, 0)
+    h2_getitem_3 = operator.getitem(h2__fused_rms_norm_1, 1)
     h2_detach_1: 'float32[32, 2048, 1]' = aten.detach(h2_getitem_3)  # strides=(2048, 1, 1), contiguous=True, view=True
 
     # self.transformer.h.2.mlp.c_fc (Linear)
@@ -1063,10 +1070,9 @@ def forward(
     # self.transformer.h.3 (Block)
     # /.autoresearch_repo/train.py:114
     # x = x + self.attn(norm(x), ve, cos_sin, window_size)
-    h3_add: 'bfloat16[32, 2048, 512]' = aten.add.Tensor(add_25_add, h3_attn_c_proj__unsafe_view)  # strides=(1048576, 512, 1), contiguous=True, view=False
-    h3__fused_rms_norm_1 = aten._fused_rms_norm(h3_add, [512], None, None)  # out0: strides=(1048576, 512, 1), contiguous=True; out1: strides=(2048, 1, 1), contiguous=True, view=False
-    h3_getitem_2: 'bfloat16[32, 2048, 512]' = operator.getitem(h3__fused_rms_norm_1, 0)  # strides=(1048576, 512, 1), contiguous=True, view=True
-    h3_getitem_3: 'float32[32, 2048, 1]' = operator.getitem(h3__fused_rms_norm_1, 1)  # strides=(2048, 1, 1), contiguous=True, view=True
+    h3_add, h3__fused_rms_norm_1 = torch_add_rmsnorm(add_25_add, h3_attn_c_proj__unsafe_view, [512])
+    h3_getitem_2 = operator.getitem(h3__fused_rms_norm_1, 0)
+    h3_getitem_3 = operator.getitem(h3__fused_rms_norm_1, 1)
     h3_detach_1: 'float32[32, 2048, 1]' = aten.detach(h3_getitem_3)  # strides=(2048, 1, 1), contiguous=True, view=True
 
     # self.transformer.h.3.mlp.c_fc (Linear)
@@ -1196,10 +1202,9 @@ def forward(
     # self.transformer.h.4 (Block)
     # /.autoresearch_repo/train.py:114
     # x = x + self.attn(norm(x), ve, cos_sin, window_size)
-    h4_add: 'bfloat16[32, 2048, 512]' = aten.add.Tensor(add_33_add, h4_attn_c_proj__unsafe_view)  # strides=(1048576, 512, 1), contiguous=True, view=False
-    h4__fused_rms_norm_1 = aten._fused_rms_norm(h4_add, [512], None, None)  # out0: strides=(1048576, 512, 1), contiguous=True; out1: strides=(2048, 1, 1), contiguous=True, view=False
-    h4_getitem_2: 'bfloat16[32, 2048, 512]' = operator.getitem(h4__fused_rms_norm_1, 0)  # strides=(1048576, 512, 1), contiguous=True, view=True
-    h4_getitem_3: 'float32[32, 2048, 1]' = operator.getitem(h4__fused_rms_norm_1, 1)  # strides=(2048, 1, 1), contiguous=True, view=True
+    h4_add, h4__fused_rms_norm_1 = torch_add_rmsnorm(add_33_add, h4_attn_c_proj__unsafe_view, [512])
+    h4_getitem_2 = operator.getitem(h4__fused_rms_norm_1, 0)
+    h4_getitem_3 = operator.getitem(h4__fused_rms_norm_1, 1)
     h4_detach_1: 'float32[32, 2048, 1]' = aten.detach(h4_getitem_3)  # strides=(2048, 1, 1), contiguous=True, view=True
 
     # self.transformer.h.4.mlp.c_fc (Linear)
@@ -1358,10 +1363,9 @@ def forward(
     # self.transformer.h.5 (Block)
     # /.autoresearch_repo/train.py:114
     # x = x + self.attn(norm(x), ve, cos_sin, window_size)
-    h5_add: 'bfloat16[32, 2048, 512]' = aten.add.Tensor(add_41_add, h5_attn_c_proj__unsafe_view)  # strides=(1048576, 512, 1), contiguous=True, view=False
-    h5__fused_rms_norm_1 = aten._fused_rms_norm(h5_add, [512], None, None)  # out0: strides=(1048576, 512, 1), contiguous=True; out1: strides=(2048, 1, 1), contiguous=True, view=False
-    h5_getitem_2: 'bfloat16[32, 2048, 512]' = operator.getitem(h5__fused_rms_norm_1, 0)  # strides=(1048576, 512, 1), contiguous=True, view=True
-    h5_getitem_3: 'float32[32, 2048, 1]' = operator.getitem(h5__fused_rms_norm_1, 1)  # strides=(2048, 1, 1), contiguous=True, view=True
+    h5_add, h5__fused_rms_norm_1 = torch_add_rmsnorm(add_41_add, h5_attn_c_proj__unsafe_view, [512])
+    h5_getitem_2 = operator.getitem(h5__fused_rms_norm_1, 0)
+    h5_getitem_3 = operator.getitem(h5__fused_rms_norm_1, 1)
     h5_detach_1: 'float32[32, 2048, 1]' = aten.detach(h5_getitem_3)  # strides=(2048, 1, 1), contiguous=True, view=True
 
     # self.transformer.h.5.mlp.c_fc (Linear)
@@ -1491,10 +1495,9 @@ def forward(
     # self.transformer.h.6 (Block)
     # /.autoresearch_repo/train.py:114
     # x = x + self.attn(norm(x), ve, cos_sin, window_size)
-    h6_add: 'bfloat16[32, 2048, 512]' = aten.add.Tensor(add_50_add, h6_attn_c_proj__unsafe_view)  # strides=(1048576, 512, 1), contiguous=True, view=False
-    h6__fused_rms_norm_1 = aten._fused_rms_norm(h6_add, [512], None, None)  # out0: strides=(1048576, 512, 1), contiguous=True; out1: strides=(2048, 1, 1), contiguous=True, view=False
-    h6_getitem_2: 'bfloat16[32, 2048, 512]' = operator.getitem(h6__fused_rms_norm_1, 0)  # strides=(1048576, 512, 1), contiguous=True, view=True
-    h6_getitem_3: 'float32[32, 2048, 1]' = operator.getitem(h6__fused_rms_norm_1, 1)  # strides=(2048, 1, 1), contiguous=True, view=True
+    h6_add, h6__fused_rms_norm_1 = torch_add_rmsnorm(add_50_add, h6_attn_c_proj__unsafe_view, [512])
+    h6_getitem_2 = operator.getitem(h6__fused_rms_norm_1, 0)
+    h6_getitem_3 = operator.getitem(h6__fused_rms_norm_1, 1)
     h6_detach_1: 'float32[32, 2048, 1]' = aten.detach(h6_getitem_3)  # strides=(2048, 1, 1), contiguous=True, view=True
 
     # self.transformer.h.6.mlp.c_fc (Linear)
@@ -1652,10 +1655,9 @@ def forward(
     # self.transformer.h.7 (Block)
     # /.autoresearch_repo/train.py:114
     # x = x + self.attn(norm(x), ve, cos_sin, window_size)
-    h7_add: 'bfloat16[32, 2048, 512]' = aten.add.Tensor(add_58_add, h7_attn_c_proj__unsafe_view)  # strides=(1048576, 512, 1), contiguous=True, view=False
-    h7__fused_rms_norm_1 = aten._fused_rms_norm(h7_add, [512], None, None)  # out0: strides=(1048576, 512, 1), contiguous=True; out1: strides=(2048, 1, 1), contiguous=True, view=False
-    h7_getitem_2: 'bfloat16[32, 2048, 512]' = operator.getitem(h7__fused_rms_norm_1, 0)  # strides=(1048576, 512, 1), contiguous=True, view=True
-    h7_getitem_3: 'float32[32, 2048, 1]' = operator.getitem(h7__fused_rms_norm_1, 1)  # strides=(2048, 1, 1), contiguous=True, view=True
+    h7_add, h7__fused_rms_norm_1 = torch_add_rmsnorm(add_58_add, h7_attn_c_proj__unsafe_view, [512])
+    h7_getitem_2 = operator.getitem(h7__fused_rms_norm_1, 0)
+    h7_getitem_3 = operator.getitem(h7__fused_rms_norm_1, 1)
     h7_detach_1: 'float32[32, 2048, 1]' = aten.detach(h7_getitem_3)  # strides=(2048, 1, 1), contiguous=True, view=True
 
     # self.transformer.h.7.mlp.c_fc (Linear)

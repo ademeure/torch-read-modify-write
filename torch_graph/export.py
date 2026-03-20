@@ -2000,6 +2000,350 @@ def _normalize_template_key(top_module: str) -> str:
     return ".".join(parts)
 
 
+def _compute_all_module_levels(node: Node) -> list[tuple[str, str, str]]:
+    """Return all (module_path, instance_idx, module_type) levels for a node.
+
+    Walks the nn_module_stack from outermost to innermost.  Once a numeric
+    instance index is found (e.g. ``transformer.h.0``), that entry and every
+    deeper entry become levels for hierarchical grouping.
+
+    For a node in ``transformer.h.0.attn.c_q``, returns::
+
+        [("transformer.h.0", "0", "Block"),
+         ("transformer.h.0.attn", "0", "CausalSelfAttention"),
+         ("transformer.h.0.attn.c_q", "0", "Linear")]
+
+    Returns an empty list when no numeric-indexed module is found.
+    """
+    nn_mod = node.meta.get("nn_module_stack") or node.meta.get("fwd_nn_module_stack", {})
+    if not nn_mod:
+        return []
+
+    results: list[tuple[str, str, str]] = []
+    base_idx: str | None = None
+    base_depth: int | None = None
+
+    for _, v in nn_mod.items():
+        if not (isinstance(v, tuple) and len(v) >= 2):
+            continue
+        raw_path = v[0]
+        mod_type_obj = v[1]
+        mod_type = mod_type_obj.__name__ if hasattr(mod_type_obj, "__name__") else str(mod_type_obj)
+        clean = _clean_self_path(raw_path)
+        parts = clean.split(".")
+
+        if base_idx is None:
+            # Looking for the first numeric index at depth >= 1
+            for i, p in enumerate(parts):
+                if p.isdigit() and i >= 1:
+                    base_idx = p
+                    base_depth = i
+                    results.append((clean, base_idx, mod_type))
+                    break
+        else:
+            # Already found numeric base — this is a sub-module underneath it.
+            # Verify this path is actually under the same numeric-indexed parent.
+            if len(parts) > base_depth and parts[base_depth] == base_idx:
+                results.append((clean, base_idx, mod_type))
+
+    return results
+
+
+def _build_group_from_instances(
+    template: str,
+    mod_type: str,
+    instances: dict[str, list[Node]],
+    instance_ir: dict[str, list[dict]],
+    instance_order: list[str],
+    compute_nodes: list[Node],
+    ir_nodes_by_name: dict[str, dict],
+    name_remap: dict[str, str],
+) -> _UniqueGroup | None:
+    """Build a ``_UniqueGroup`` from structurally-matched instances.
+
+    This implements Phases 3–4 of the original uniquification algorithm:
+    computing external inputs/outputs and generating the function body.
+    """
+    if not instance_order:
+        return None
+
+    template_idx = instance_order[0]
+    template_nodes = instances[template_idx]
+    template_ir_nodes = instance_ir[template_idx]
+    template_names = {n.name for n in template_nodes}
+
+    # ── Phase 3: external inputs & outputs ────────────────────────
+
+    external_inputs_ordered: list[str] = []
+
+    def _collect_external_refs(v: dict, group_names: set[str], ext_list: list[str]):
+        if "node" in v:
+            ref = v["node"]
+            if ref not in group_names and ref not in ext_list:
+                ext_list.append(ref)
+            return
+        kind = v.get("kind", "")
+        if kind in ("list", "tuple"):
+            for item in v.get("items", []):
+                _collect_external_refs(item, group_names, ext_list)
+        elif kind == "dict":
+            for item in v.get("items", []):
+                _collect_external_refs(item["key"], group_names, ext_list)
+                _collect_external_refs(item["value"], group_names, ext_list)
+        elif kind == "slice":
+            _collect_external_refs(v["start"], group_names, ext_list)
+            _collect_external_refs(v["stop"], group_names, ext_list)
+            _collect_external_refs(v["step"], group_names, ext_list)
+
+    for ir_node in template_ir_nodes:
+        for arg in ir_node.get("args", []):
+            _collect_external_refs(arg, template_names, external_inputs_ordered)
+        for _, kwarg_v in ir_node.get("kwargs", {}).items():
+            _collect_external_refs(kwarg_v, template_names, external_inputs_ordered)
+
+    # Find outputs: nodes whose values are used OUTSIDE the group
+    template_outputs: list[str] = []
+    for node in template_nodes:
+        for user in node.users:
+            if user.name not in template_names:
+                if node.name not in template_outputs:
+                    template_outputs.append(node.name)
+                break
+
+    # Also check the output node
+    output_node = None
+    for n in compute_nodes[0].graph.nodes:
+        if n.op == "output":
+            output_node = n
+            break
+
+    if output_node:
+        def _check_output_refs(val, names_set, outputs_list):
+            if isinstance(val, Node):
+                if val.name in names_set and val.name not in outputs_list:
+                    outputs_list.append(val.name)
+            elif isinstance(val, (tuple, list)):
+                for v in val:
+                    _check_output_refs(v, names_set, outputs_list)
+        _check_output_refs(
+            output_node.args[0] if output_node.args else [],
+            template_names, template_outputs,
+        )
+
+    if not template_outputs and not external_inputs_ordered:
+        return None
+
+    # Build per-instance input/output name maps
+    input_name_map: dict[str, dict[str, str]] = {}
+    output_name_map: dict[str, dict[str, str]] = {}
+
+    for idx in instance_order:
+        inst_nodes = instances[idx]
+        inst_ir = instance_ir[idx]
+        inst_names = {n.name for n in inst_nodes}
+
+        inst_ext: list[str] = []
+        for ir_node in inst_ir:
+            for arg in ir_node.get("args", []):
+                _collect_external_refs(arg, inst_names, inst_ext)
+            for _, kwarg_v in ir_node.get("kwargs", {}).items():
+                _collect_external_refs(kwarg_v, inst_names, inst_ext)
+
+        inp_map = {}
+        for i, tmpl_ext in enumerate(external_inputs_ordered):
+            local_name = name_remap.get(tmpl_ext, tmpl_ext)
+            if i < len(inst_ext):
+                inp_map[local_name] = name_remap.get(inst_ext[i], inst_ext[i])
+        input_name_map[idx] = inp_map
+
+        inst_outputs: list[str] = []
+        for node in inst_nodes:
+            for user in node.users:
+                if user.name not in inst_names:
+                    if node.name not in inst_outputs:
+                        inst_outputs.append(node.name)
+                    break
+        if output_node:
+            _check_output_refs(
+                output_node.args[0] if output_node.args else [],
+                inst_names, inst_outputs,
+            )
+
+        out_map = {}
+        for i, tmpl_out in enumerate(template_outputs):
+            local_name = name_remap.get(tmpl_out, tmpl_out)
+            if i < len(inst_outputs):
+                out_map[local_name] = name_remap.get(inst_outputs[i], inst_outputs[i])
+        output_name_map[idx] = out_map
+
+    # ── Phase 4: function body & signature ────────────────────────
+
+    template_idx_str = template_idx
+    raw_base = template.replace(".*", "")
+    if raw_base.startswith("self."):
+        raw_base = raw_base[5:]
+    template_base = raw_base.replace(".", "_")
+    instance_prefix = f"{template_base}_{template_idx_str}_"
+
+    def _genericize_name(name: str) -> str:
+        if name.startswith(instance_prefix):
+            stripped = name[len(instance_prefix):]
+            if stripped and not stripped[0].isdigit():
+                return stripped
+        return name
+
+    generic_param_names: dict[str, str] = {}
+    param_defs: list[dict] = []
+    used_generic: set[str] = set()
+    for ext_name in external_inputs_ordered:
+        local = name_remap.get(ext_name, ext_name)
+        generic = _genericize_name(local)
+        base = generic
+        counter = 0
+        while generic in used_generic:
+            counter += 1
+            generic = f"{base}_{counter}"
+        used_generic.add(generic)
+        generic_param_names[local] = generic
+        annotation = ""
+        ir_node = ir_nodes_by_name.get(ext_name)
+        if ir_node and ir_node.get("meta"):
+            meta = ir_node["meta"]
+            if meta.get("shape") and meta.get("dtype"):
+                dtype_name = meta["dtype"].split(".")[-1]
+                dims = ", ".join(str(s) for s in meta["shape"])
+                annotation = f"{dtype_name}[{dims}]"
+        for n in compute_nodes[0].graph.nodes:
+            if n.op == "placeholder" and n.name == ext_name:
+                from torch_graph.internal_ir import placeholder_annotation as _ph_ann, tensor_meta as _tmeta
+                annotation = _ph_ann(n)
+                tmeta = _tmeta(n.meta.get("val"))
+                if tmeta:
+                    shape_str = f"{tmeta['dtype'].split('.')[-1]}[{', '.join(str(s) for s in tmeta['shape'])}]"
+                    annotation = shape_str
+                break
+        param_defs.append({"name": generic, "annotation": annotation})
+
+    generic_output_names: dict[str, str] = {}
+    return_defs: list[dict] = []
+    for out_name in template_outputs:
+        local = name_remap.get(out_name, out_name)
+        generic_out = _genericize_name(local)
+        base = generic_out
+        counter = 0
+        while generic_out in used_generic:
+            counter += 1
+            generic_out = f"{base}_{counter}"
+        used_generic.add(generic_out)
+        generic_output_names[local] = generic_out
+        annotation = ""
+        ir_node = ir_nodes_by_name.get(out_name)
+        if ir_node and ir_node.get("meta"):
+            meta = ir_node["meta"]
+            if meta.get("shape") and meta.get("dtype"):
+                dtype_name = meta["dtype"].split(".")[-1]
+                dims = ", ".join(str(s) for s in meta["shape"])
+                annotation = f"{dtype_name}[{dims}]"
+        return_defs.append({"name": generic_out, "annotation": annotation})
+
+    fn_name = re.sub(r'(?<!^)(?=[A-Z])', '_', mod_type).lower()
+    fn_name = re.sub(r'[^a-zA-Z0-9_]', '_', fn_name).strip('_')
+    if not fn_name or fn_name[0].isdigit():
+        fn_name = f"layer_{fn_name}"
+
+    # Generate body code
+    body_lines: list[str] = []
+    local_remap: dict[str, str] = {}
+    for ext_name in external_inputs_ordered:
+        orig_local = name_remap.get(ext_name, ext_name)
+        local_remap[ext_name] = generic_param_names.get(orig_local, orig_local)
+    for node in template_nodes:
+        orig_local = name_remap.get(node.name, node.name)
+        generic_intermediate = _genericize_name(orig_local)
+        local_remap[node.name] = generic_intermediate
+
+    if local_remap:
+        sorted_names = sorted(local_remap.keys(), key=len, reverse=True)
+        pattern = r'(?<![.])\b(?:' + '|'.join(re.escape(n) for n in sorted_names) + r')\b'
+        local_remap_re = re.compile(pattern)
+    else:
+        local_remap_re = None
+
+    for node in template_nodes:
+        ir_node = ir_nodes_by_name.get(node.name)
+        if ir_node is None:
+            continue
+        line = ir_node["python"]
+        if not line:
+            continue
+        if local_remap_re is not None:
+            line = local_remap_re.sub(lambda m: local_remap.get(m.group(0), m.group(0)), line)
+        for sub in line.split("\n"):
+            body_lines.append(f"    {sub}")
+
+    if template_outputs:
+        ret_names = []
+        for n in template_outputs:
+            orig_local = name_remap.get(n, n)
+            ret_names.append(generic_output_names.get(orig_local, _genericize_name(orig_local)))
+        body_lines.append(f"    return ({', '.join(ret_names)},)")
+
+    body_code = "\n".join(body_lines)
+
+    # Remap input/output maps to use generic keys
+    generic_input_name_map: dict[str, dict[str, str]] = {}
+    for idx in instance_order:
+        new_map = {}
+        for orig_key, actual_val in input_name_map[idx].items():
+            generic_key = generic_param_names.get(orig_key, orig_key)
+            new_map[generic_key] = actual_val
+        generic_input_name_map[idx] = new_map
+
+    generic_output_name_map: dict[str, dict[str, str]] = {}
+    for idx in instance_order:
+        new_map = {}
+        for orig_key, actual_val in output_name_map[idx].items():
+            generic_key = generic_output_names.get(orig_key, orig_key)
+            new_map[generic_key] = actual_val
+        generic_output_name_map[idx] = new_map
+
+    all_names: set[str] = set()
+    first_node_map: dict[str, str] = {}
+    for idx in instance_order:
+        nodes = instances[idx]
+        for n in nodes:
+            all_names.add(n.name)
+        if nodes:
+            first_node_map[idx] = nodes[0].name
+
+    return _UniqueGroup(
+        template_key=template,
+        module_type=mod_type,
+        fn_name=fn_name,
+        instances=instances,
+        instance_order=instance_order,
+        params=param_defs,
+        returns=return_defs,
+        body_code=body_code,
+        first_node_per_instance=first_node_map,
+        all_node_names=all_names,
+        output_name_map=generic_output_name_map,
+        input_name_map=generic_input_name_map,
+    )
+
+
+def _disambiguate_fn_names(groups: list[_UniqueGroup]) -> None:
+    """Ensure all extracted function names are unique by adding numeric suffixes."""
+    name_indices: dict[str, list[int]] = {}
+    for i, g in enumerate(groups):
+        name_indices.setdefault(g.fn_name, []).append(i)
+    for name, indices in name_indices.items():
+        if len(indices) <= 1:
+            continue
+        for j, idx in enumerate(indices):
+            groups[idx].fn_name = f"{name}_{j}"
+
+
 def _build_structural_signature(
     ir_nodes: list[dict],
     group_names: set[str],
@@ -2056,46 +2400,58 @@ def _detect_unique_groups(
     source_map: dict | None,
     is_backward: bool,
 ) -> list[_UniqueGroup]:
-    """Detect repeated structurally-identical module groups.
+    """Detect repeated structurally-identical module groups, with hierarchical fallback.
 
-    Returns a list of _UniqueGroup objects for groups with 2+ identical instances.
+    Tries shallowest module depth first (e.g. ``transformer.h.*``).  When the
+    top-level doesn't produce a full match, drills into sub-modules
+    (e.g. ``transformer.h.*.attn``, ``transformer.h.*.mlp``) and extracts
+    those separately.
+
+    Supports *partial* matching: if only a subset of instances share a
+    signature (e.g. even vs odd layers), each subset becomes its own group.
+
+    Returns a list of ``_UniqueGroup`` objects for groups with 2+ identical
+    instances.
     """
-    # Phase 1: Group nodes by template key
-    template_instances: dict[str, dict[str, list[Node]]] = {}  # template -> {idx -> [nodes]}
-    template_types: dict[str, str] = {}  # template -> module_type
-    node_to_instance: dict[str, tuple[str, str]] = {}  # node.name -> (template, idx)
+    from collections import defaultdict
+
+    # Phase 1: Group nodes by ALL template levels (multi-depth)
+    all_templates: dict[str, dict[str, list[Node]]] = {}  # template -> {idx -> [nodes]}
+    all_types: dict[str, str] = {}  # template -> module_type
 
     for node in compute_nodes:
-        info = _compute_node_top_module(node)
-        if info is None:
-            continue
-        top_path, instance_idx, mod_type = info
-        template = _normalize_template_key(top_path)
-        if template not in template_instances:
-            template_instances[template] = {}
-            template_types[template] = mod_type
-        if instance_idx not in template_instances[template]:
-            template_instances[template][instance_idx] = []
-        template_instances[template][instance_idx].append(node)
-        node_to_instance[node.name] = (template, instance_idx)
+        for top_path, instance_idx, mod_type in _compute_all_module_levels(node):
+            template = _normalize_template_key(top_path)
+            all_templates.setdefault(template, {}).setdefault(instance_idx, []).append(node)
+            if template not in all_types:
+                all_types[template] = mod_type
 
-    # Phase 2: For templates with 2+ instances, compare structural signatures
+    # Sort templates by depth (shallowest first) so top-level groups are tried
+    # before sub-module groups.  Ties broken alphabetically for determinism.
+    sorted_templates = sorted(all_templates.keys(), key=lambda t: (t.count("."), t))
+
     groups: list[_UniqueGroup] = []
+    extracted_nodes: set[str] = set()  # nodes already in a group — skip at deeper levels
 
-    for template, instances in template_instances.items():
-        if len(instances) < 2:
+    for template in sorted_templates:
+        raw_instances = all_templates[template]
+
+        # Filter out nodes already extracted at a shallower depth
+        filtered: dict[str, list[Node]] = {}
+        for idx, nodes in raw_instances.items():
+            remaining = [n for n in nodes if n.name not in extracted_nodes]
+            if remaining:
+                filtered[idx] = remaining
+
+        if len(filtered) < 2:
             continue
 
-        # Build IR node lists and signatures for each instance
+        # Phase 2: Build IR + structural signatures, group by signature
         instance_ir: dict[str, list[dict]] = {}
         instance_sigs: dict[str, tuple] = {}
-        for idx, nodes in instances.items():
-            ir_nodes = []
+        for idx, nodes in filtered.items():
             group_names = {n.name for n in nodes}
-            for n in nodes:
-                ir_node = ir_nodes_by_name.get(n.name)
-                if ir_node is not None:
-                    ir_nodes.append(ir_node)
+            ir_nodes = [ir_nodes_by_name[n.name] for n in nodes if n.name in ir_nodes_by_name]
             if not ir_nodes:
                 continue
             instance_ir[idx] = ir_nodes
@@ -2104,319 +2460,37 @@ def _detect_unique_groups(
         if len(instance_sigs) < 2:
             continue
 
-        # All instances must have the same signature (same tuple[0]) and same number of ops
-        sig_values = list(instance_sigs.values())
-        ref_sig = sig_values[0]
-        if not all(s == ref_sig for s in sig_values[1:]):
-            continue
+        # Bucket instances by signature (allows partial matching)
+        sig_buckets: dict[tuple, list[str]] = defaultdict(list)
+        for idx, sig in instance_sigs.items():
+            sig_buckets[sig].append(idx)
 
-        # Phase 3: Compute external inputs (params) and outputs (returns)
-        # Use the first instance as template
-        sorted_idxs = sorted(instances.keys(), key=lambda x: int(x))
-        # Determine graph order
-        instance_first_pos = {}
-        for idx, nodes in instances.items():
-            for i, cn in enumerate(compute_nodes):
-                if cn is nodes[0]:
-                    instance_first_pos[idx] = i
-                    break
-        instance_order = sorted(sorted_idxs, key=lambda x: instance_first_pos.get(x, 0))
+        for _sig, matching_idxs in sig_buckets.items():
+            if len(matching_idxs) < 2:
+                continue
 
-        template_idx = instance_order[0]
-        template_nodes = instances[template_idx]
-        template_ir = instance_ir[template_idx]
-        template_names = {n.name for n in template_nodes}
-
-        # Find external inputs: node refs in args/kwargs that are NOT in the group
-        external_inputs_ordered: list[str] = []
-
-        def _collect_external_refs(v: dict, group_names: set[str], ext_list: list[str]):
-            if "node" in v:
-                ref = v["node"]
-                if ref not in group_names and ref not in ext_list:
-                    ext_list.append(ref)
-                return
-            kind = v.get("kind", "")
-            if kind in ("list", "tuple"):
-                for item in v.get("items", []):
-                    _collect_external_refs(item, group_names, ext_list)
-            elif kind == "dict":
-                for item in v.get("items", []):
-                    _collect_external_refs(item["key"], group_names, ext_list)
-                    _collect_external_refs(item["value"], group_names, ext_list)
-            elif kind == "slice":
-                _collect_external_refs(v["start"], group_names, ext_list)
-                _collect_external_refs(v["stop"], group_names, ext_list)
-                _collect_external_refs(v["step"], group_names, ext_list)
-
-        for ir_node in template_ir:
-            for arg in ir_node.get("args", []):
-                _collect_external_refs(arg, template_names, external_inputs_ordered)
-            for _, kwarg_v in ir_node.get("kwargs", {}).items():
-                _collect_external_refs(kwarg_v, template_names, external_inputs_ordered)
-
-        # Find outputs: nodes whose values are used OUTSIDE the group
-        all_nodes_set = set()
-        for idx in instance_order:
-            for n in instances[idx]:
-                all_nodes_set.add(n.name)
-
-        # For the template instance, find which nodes are used outside
-        template_outputs: list[str] = []
-        for node in template_nodes:
-            for user in node.users:
-                if user.name not in template_names:
-                    if node.name not in template_outputs:
-                        template_outputs.append(node.name)
-                    break
-
-        # Also check the output node
-        output_node = None
-        for n in compute_nodes[0].graph.nodes:
-            if n.op == "output":
-                output_node = n
-                break
-        if output_node:
-            def _check_output_refs(val, names_set, outputs_list):
-                if isinstance(val, Node):
-                    if val.name in names_set and val.name not in outputs_list:
-                        outputs_list.append(val.name)
-                elif isinstance(val, (tuple, list)):
-                    for v in val:
-                        _check_output_refs(v, names_set, outputs_list)
-            _check_output_refs(output_node.args[0] if output_node.args else [], template_names, template_outputs)
-
-        if not template_outputs and not external_inputs_ordered:
-            continue
-
-        # Build input/output name maps for each instance
-        # For each instance, find the corresponding external inputs and outputs
-        input_name_map: dict[str, dict[str, str]] = {}
-        output_name_map: dict[str, dict[str, str]] = {}
-
-        for idx in instance_order:
-            inst_nodes = instances[idx]
-            inst_ir = instance_ir[idx]
-            inst_names = {n.name for n in inst_nodes}
-
-            # Find external inputs for this instance (in the same structural order)
-            inst_ext: list[str] = []
-            for ir_node in inst_ir:
-                for arg in ir_node.get("args", []):
-                    _collect_external_refs(arg, inst_names, inst_ext)
-                for _, kwarg_v in ir_node.get("kwargs", {}).items():
-                    _collect_external_refs(kwarg_v, inst_names, inst_ext)
-
-            # Map template external -> instance external
-            inp_map = {}
-            for i, tmpl_ext in enumerate(external_inputs_ordered):
-                local_name = name_remap.get(tmpl_ext, tmpl_ext)
-                if i < len(inst_ext):
-                    inp_map[local_name] = name_remap.get(inst_ext[i], inst_ext[i])
-            input_name_map[idx] = inp_map
-
-            # Find outputs for this instance (same structural positions)
-            inst_outputs: list[str] = []
-            for node in inst_nodes:
-                for user in node.users:
-                    if user.name not in inst_names:
-                        if node.name not in inst_outputs:
-                            inst_outputs.append(node.name)
+            # Determine graph order for this subset
+            instance_first_pos: dict[str, int] = {}
+            for idx in matching_idxs:
+                for i, cn in enumerate(compute_nodes):
+                    if cn is filtered[idx][0]:
+                        instance_first_pos[idx] = i
                         break
-            if output_node:
-                _check_output_refs(output_node.args[0] if output_node.args else [], inst_names, inst_outputs)
+            instance_order = sorted(matching_idxs, key=lambda x: instance_first_pos.get(x, 0))
 
-            out_map = {}
-            for i, tmpl_out in enumerate(template_outputs):
-                local_name = name_remap.get(tmpl_out, tmpl_out)
-                if i < len(inst_outputs):
-                    out_map[local_name] = name_remap.get(inst_outputs[i], inst_outputs[i])
-            output_name_map[idx] = out_map
+            subset_instances = {idx: filtered[idx] for idx in matching_idxs}
+            subset_ir = {idx: instance_ir[idx] for idx in matching_idxs}
 
-        # Phase 4: Generate function body and signature
+            group = _build_group_from_instances(
+                template, all_types[template],
+                subset_instances, subset_ir, instance_order,
+                compute_nodes, ir_nodes_by_name, name_remap,
+            )
+            if group is not None:
+                groups.append(group)
+                extracted_nodes.update(group.all_node_names)
 
-        # Build generic param names by stripping instance-specific prefix
-        # e.g. "blocks_0_fc1_weight" -> "fc1_weight" for template "self.blocks.*"
-        template_idx_str = template_idx  # e.g. "0"
-        # Build prefix: strip "self." then convert dots to underscores
-        # "self.blocks.*" -> "blocks" -> prefix "blocks_0_"
-        raw_base = template.replace(".*", "")
-        if raw_base.startswith("self."):
-            raw_base = raw_base[5:]
-        template_base = raw_base.replace(".", "_")
-        instance_prefix = f"{template_base}_{template_idx_str}_"
-
-        def _genericize_name(name: str) -> str:
-            """Strip instance-specific prefix from a param name."""
-            if name.startswith(instance_prefix):
-                stripped = name[len(instance_prefix):]
-                if stripped and not stripped[0].isdigit():
-                    return stripped
-            return name
-
-        # Build local param names for the function
-        generic_param_names: dict[str, str] = {}  # original local -> generic
-        param_defs: list[dict] = []
-        used_generic: set[str] = set()
-        for ext_name in external_inputs_ordered:
-            local = name_remap.get(ext_name, ext_name)
-            generic = _genericize_name(local)
-            # Dedup
-            base = generic
-            counter = 0
-            while generic in used_generic:
-                counter += 1
-                generic = f"{base}_{counter}"
-            used_generic.add(generic)
-            generic_param_names[local] = generic
-            # Get shape/dtype annotation from the placeholder or node meta
-            annotation = ""
-            shape_comment = ""
-            # Try to find from ir_graph placeholders or from node meta
-            ir_node = ir_nodes_by_name.get(ext_name)
-            if ir_node and ir_node.get("meta"):
-                meta = ir_node["meta"]
-                if meta.get("shape") and meta.get("dtype"):
-                    dtype_name = meta["dtype"].split(".")[-1]
-                    dims = ", ".join(str(s) for s in meta["shape"])
-                    annotation = f"{dtype_name}[{dims}]"
-            # Also check if it's a placeholder in the main graph
-            for n in compute_nodes[0].graph.nodes:
-                if n.op == "placeholder" and n.name == ext_name:
-                    from torch_graph.internal_ir import placeholder_annotation as _ph_ann, tensor_meta as _tmeta
-                    annotation = _ph_ann(n)
-                    tmeta = _tmeta(n.meta.get("val"))
-                    if tmeta:
-                        # Build stride comment from the real tensor if available
-                        shape_str = f"{tmeta['dtype'].split('.')[-1]}[{', '.join(str(s) for s in tmeta['shape'])}]"
-                        annotation = shape_str
-                    break
-
-            param_defs.append({
-                "name": generic,
-                "annotation": annotation,
-            })
-
-        # Also genericize output names for the return defs and body
-        generic_output_names: dict[str, str] = {}  # original local -> generic
-        return_defs: list[dict] = []
-        for out_name in template_outputs:
-            local = name_remap.get(out_name, out_name)
-            generic_out = _genericize_name(local)
-            # Dedup against param names
-            base = generic_out
-            counter = 0
-            while generic_out in used_generic:
-                counter += 1
-                generic_out = f"{base}_{counter}"
-            used_generic.add(generic_out)
-            generic_output_names[local] = generic_out
-            annotation = ""
-            ir_node = ir_nodes_by_name.get(out_name)
-            if ir_node and ir_node.get("meta"):
-                meta = ir_node["meta"]
-                if meta.get("shape") and meta.get("dtype"):
-                    dtype_name = meta["dtype"].split(".")[-1]
-                    dims = ", ".join(str(s) for s in meta["shape"])
-                    annotation = f"{dtype_name}[{dims}]"
-            return_defs.append({
-                "name": generic_out,
-                "annotation": annotation,
-            })
-
-        # Generate function name from module type
-        mod_type = template_types[template]
-        fn_name = re.sub(r'(?<!^)(?=[A-Z])', '_', mod_type).lower()  # CamelCase -> snake_case
-        fn_name = re.sub(r'[^a-zA-Z0-9_]', '_', fn_name).strip('_')
-        if not fn_name or fn_name[0].isdigit():
-            fn_name = f"layer_{fn_name}"
-
-        # Generate body code using template instance
-        body_lines: list[str] = []
-        # Build a local remap for inside the function: use generic names
-        local_remap: dict[str, str] = {}
-        for ext_name in external_inputs_ordered:
-            orig_local = name_remap.get(ext_name, ext_name)
-            local_remap[ext_name] = generic_param_names.get(orig_local, orig_local)
-        # Also remap intermediate node names to generic forms
-        for node in template_nodes:
-            orig_local = name_remap.get(node.name, node.name)
-            generic_intermediate = _genericize_name(orig_local)
-            local_remap[node.name] = generic_intermediate
-
-        # Build regex for local remapping
-        if local_remap:
-            sorted_names = sorted(local_remap.keys(), key=len, reverse=True)
-            pattern = r'(?<![.])\b(?:' + '|'.join(re.escape(n) for n in sorted_names) + r')\b'
-            local_remap_re = re.compile(pattern)
-        else:
-            local_remap_re = None
-
-        for node in template_nodes:
-            ir_node = ir_nodes_by_name.get(node.name)
-            if ir_node is None:
-                continue
-            line = ir_node["python"]
-            if not line:
-                continue
-            # Apply local name remapping (to generic names)
-            if local_remap_re is not None:
-                line = local_remap_re.sub(lambda m: local_remap.get(m.group(0), m.group(0)), line)
-            for sub in line.split("\n"):
-                body_lines.append(f"    {sub}")
-
-        # Add return statement using generic output names
-        if template_outputs:
-            ret_names = []
-            for n in template_outputs:
-                orig_local = name_remap.get(n, n)
-                ret_names.append(generic_output_names.get(orig_local, _genericize_name(orig_local)))
-            body_lines.append(f"    return ({', '.join(ret_names)},)")
-
-        body_code = "\n".join(body_lines)
-
-        # Remap input/output name map keys to use generic param names
-        generic_input_name_map: dict[str, dict[str, str]] = {}
-        for idx in instance_order:
-            new_map = {}
-            for orig_key, actual_val in input_name_map[idx].items():
-                generic_key = generic_param_names.get(orig_key, orig_key)
-                new_map[generic_key] = actual_val
-            generic_input_name_map[idx] = new_map
-
-        generic_output_name_map: dict[str, dict[str, str]] = {}
-        for idx in instance_order:
-            new_map = {}
-            for orig_key, actual_val in output_name_map[idx].items():
-                generic_key = generic_output_names.get(orig_key, orig_key)
-                new_map[generic_key] = actual_val
-            generic_output_name_map[idx] = new_map
-
-        # Collect all node names across all instances
-        all_names: set[str] = set()
-        first_node_map: dict[str, str] = {}
-        for idx in instance_order:
-            nodes = instances[idx]
-            for n in nodes:
-                all_names.add(n.name)
-            if nodes:
-                first_node_map[idx] = nodes[0].name
-
-        groups.append(_UniqueGroup(
-            template_key=template,
-            module_type=mod_type,
-            fn_name=fn_name,
-            instances=instances,
-            instance_order=instance_order,
-            params=param_defs,
-            returns=return_defs,
-            body_code=body_code,
-            first_node_per_instance=first_node_map,
-            all_node_names=all_names,
-            output_name_map=generic_output_name_map,
-            input_name_map=generic_input_name_map,
-        ))
-
+    _disambiguate_fn_names(groups)
     return groups
 
 
@@ -2613,7 +2687,7 @@ def export_graph_to_python(
     unique_groups: list[_UniqueGroup] = []
     unique_skip_nodes: set[str] = set()      # nodes to skip (emitted via call site)
     unique_call_at: dict[str, tuple[_UniqueGroup, str]] = {}  # node.name -> (group, instance_idx)
-    if uniquify and not is_backward:
+    if uniquify:
         unique_groups = _detect_unique_groups(
             compute_nodes, ir_nodes_by_name, name_remap, source_map, is_backward,
         )
@@ -3015,6 +3089,7 @@ def export_aten_program(
         )
 
     bw_code = None
+    bw_unique_fn_defs: list[str] = []
     if capture.backward_graphs:
         bg = capture.backward_graphs[0]
         bw_code = export_graph_to_python(
@@ -3026,7 +3101,25 @@ def export_aten_program(
             is_backward=True,
             named_intermediates=named_intermediates,
             dynamic_dims_comment=dynamic_dims_comment,
+            uniquify=uniquify,
+            _unique_fn_defs=bw_unique_fn_defs,
         )
+
+    # Rename backward shared functions to avoid collisions with forward names
+    if bw_unique_fn_defs and unique_fn_defs:
+        fw_names = set()
+        for fd in unique_fn_defs:
+            m = re.match(r'def (\w+)\(', fd)
+            if m:
+                fw_names.add(m.group(1))
+        for i, fd in enumerate(bw_unique_fn_defs):
+            m = re.match(r'def (\w+)\(', fd)
+            if m and m.group(1) in fw_names:
+                old = m.group(1)
+                new = f"bw_{old}"
+                bw_unique_fn_defs[i] = fd.replace(f"def {old}(", f"def {new}(", 1)
+                if bw_code:
+                    bw_code = bw_code.replace(f"{old}(", f"{new}(")
 
     has_real = capture.forward_real_inputs is not None
     all_weights = {}
@@ -3261,6 +3354,18 @@ def export_aten_program(
         buf.write("# " + "=" * 70 + "\n\n")
         buf.write(fw_code)
         buf.write("\n\n")
+
+    # ── Backward shared layer functions (uniquified) ────────────
+    if bw_unique_fn_defs:
+        buf.write("# " + "=" * 70 + "\n")
+        buf.write("# SHARED BACKWARD FUNCTIONS\n")
+        buf.write("# " + "=" * 70 + "\n")
+        buf.write("# Repeated gradient groups extracted into reusable functions.\n")
+        buf.write("# Edit once — changes apply to all instances.\n")
+        buf.write("# " + "=" * 70 + "\n\n")
+        for fn_def in bw_unique_fn_defs:
+            buf.write(fn_def)
+            buf.write("\n\n")
 
     # ── Backward function ─────────────────────────────────────────
     if bw_code:

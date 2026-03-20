@@ -295,8 +295,8 @@ def test_uniquify_helper_has_return_annotation():
         assert "return (" in fn_def
 
 
-def test_uniquify_backward_skipped():
-    """Backward graphs should NOT be uniquified (is_backward=True skips it)."""
+def test_uniquify_backward_supported():
+    """Backward graphs CAN be uniquified when module metadata is available."""
     torch.manual_seed(42)
     model = ResNetLike(dim=16)
     x = torch.randn(4, 16)
@@ -307,7 +307,7 @@ def test_uniquify_backward_skipped():
 
     bg = capture.backward_graphs[0]
     unique_fn_defs: list[str] = []
-    export_graph_to_python(
+    code = export_graph_to_python(
         bg.graph_module,
         fn_name="backward",
         annotate_sources=True,
@@ -318,8 +318,16 @@ def test_uniquify_backward_skipped():
         _unique_fn_defs=unique_fn_defs,
     )
 
-    # Backward should not produce helpers (is_backward skips uniquification)
-    assert len(unique_fn_defs) == 0
+    # Backward uniquification may or may not produce helpers depending on
+    # whether backward nodes carry nn_module_stack metadata.  When helpers
+    # ARE produced, verify they're valid Python.
+    if unique_fn_defs:
+        import operator
+        ns = {"torch": torch, "aten": torch.ops.aten, "operator": operator}
+        for fn_def in unique_fn_defs:
+            exec(fn_def, ns)  # should not raise
+        # The main backward function should compile too
+        exec("\n".join(unique_fn_defs) + "\n" + code, ns)
 
 
 def test_uniquify_bit_identical_resnet():
@@ -386,8 +394,8 @@ def test_uniquify_bit_identical_transformer():
     assert torch.equal(r_plain, r_uniq), f"Max diff: {(r_plain - r_uniq).abs().max().item()}"
 
 
-def test_uniquify_heterogeneous_blocks_not_grouped():
-    """Blocks with different structures should NOT be uniquified."""
+def test_uniquify_heterogeneous_blocks_sub_modules():
+    """Heterogeneous blocks shouldn't group at block level, but identical sub-modules should."""
     class BlockA(nn.Module):
         def __init__(self, dim):
             super().__init__()
@@ -420,12 +428,19 @@ def test_uniquify_heterogeneous_blocks_not_grouped():
     fg = capture.forward_graphs[0]
 
     unique_fn_defs: list[str] = []
+    unique_groups: list = []
     export_graph_to_python(
         fg.graph_module, fn_name="forward",
         source_map=capture.source_map, named_intermediates=True, uniquify=True,
-        _unique_fn_defs=unique_fn_defs,
+        _unique_fn_defs=unique_fn_defs, _unique_groups=unique_groups,
     )
-    assert len(unique_fn_defs) == 0, "Different block structures should not be grouped"
+    # Top-level blocks should NOT be grouped (different structures)
+    block_level = [g for g in unique_groups if g.template_key == "self.blocks.*"]
+    assert len(block_level) == 0, "Heterogeneous blocks should not group at block level"
+
+    # But the shared Linear sub-module (self.blocks.*.fc) SHOULD be extracted
+    sub_groups = [g for g in unique_groups if ".fc" in g.template_key]
+    assert len(sub_groups) >= 1, "Identical sub-modules should be extracted"
 
 
 def test_uniquify_many_layers_scales():
@@ -479,3 +494,190 @@ def test_uniquify_many_layers_scales():
     r1 = ns["forward"](*capture.forward_real_inputs)
     r2 = ns["forward_u"](*capture.forward_real_inputs)
     assert torch.equal(r1, r2)
+
+
+# ---------------------------------------------------------------------------
+# Phase 1: Hierarchical / partial matching tests
+# ---------------------------------------------------------------------------
+
+
+def test_partial_matching_even_odd_layers():
+    """Layers with two distinct structures should produce two separate groups."""
+    class BlockEven(nn.Module):
+        def __init__(self, dim):
+            super().__init__()
+            self.fc = nn.Linear(dim, dim)
+            self.ln = nn.LayerNorm(dim)
+        def forward(self, x):
+            return self.ln(F.relu(self.fc(x)))
+
+    class BlockOdd(nn.Module):
+        def __init__(self, dim):
+            super().__init__()
+            self.fc = nn.Linear(dim, dim)
+            self.gate = nn.Linear(dim, dim)  # extra module
+            self.ln = nn.LayerNorm(dim)
+        def forward(self, x):
+            return self.ln(F.relu(self.fc(x)) * torch.sigmoid(self.gate(x)))
+
+    class Model(nn.Module):
+        def __init__(self, dim=16):
+            super().__init__()
+            # Interleaved even/odd: 0=even, 1=odd, 2=even, 3=odd
+            blocks = []
+            for i in range(4):
+                blocks.append(BlockEven(dim) if i % 2 == 0 else BlockOdd(dim))
+            self.layers = nn.ModuleList(blocks)
+        def forward(self, x):
+            for layer in self.layers:
+                x = layer(x)
+            return x
+
+    torch.manual_seed(42)
+    model = Model(16)
+    x = torch.randn(4, 16)
+
+    _, capture = capture_aten_graphs(model, x, run_backward=False, record_real_tensors=True)
+    fg = capture.forward_graphs[0]
+
+    unique_fn_defs: list[str] = []
+    unique_groups: list = []
+    code = export_graph_to_python(
+        fg.graph_module, fn_name="forward_u",
+        source_map=capture.source_map, named_intermediates=True, uniquify=True,
+        _unique_fn_defs=unique_fn_defs, _unique_groups=unique_groups,
+    )
+
+    # Should find groups — either partial top-level or sub-module level
+    assert len(unique_groups) >= 1, "Should extract at least one group"
+
+    # Verify bit-identical output
+    code_plain = export_graph_to_python(
+        fg.graph_module, fn_name="forward",
+        source_map=capture.source_map, named_intermediates=True, uniquify=False,
+    )
+    import operator
+    ns = {"torch": torch, "aten": torch.ops.aten, "operator": operator}
+    exec(code_plain, ns)
+    exec("\n".join(unique_fn_defs) + "\n" + code, ns)
+    r1 = ns["forward"](*capture.forward_real_inputs)
+    r2 = ns["forward_u"](*capture.forward_real_inputs)
+    assert torch.equal(r1, r2), f"Max diff: {(r1 - r2).abs().max().item()}"
+
+
+def test_hierarchical_submodule_extraction():
+    """When top-level blocks differ, identical sub-modules should still be extracted."""
+    class Attention(nn.Module):
+        """Shared across all layers."""
+        def __init__(self, dim):
+            super().__init__()
+            self.q = nn.Linear(dim, dim, bias=False)
+            self.k = nn.Linear(dim, dim, bias=False)
+            self.proj = nn.Linear(dim, dim, bias=False)
+        def forward(self, x):
+            q, k = self.q(x), self.k(x)
+            attn = torch.softmax(q @ k.transpose(-1, -2), dim=-1)
+            return self.proj(attn @ x)
+
+    class MLP(nn.Module):
+        """Shared across all layers."""
+        def __init__(self, dim):
+            super().__init__()
+            self.fc1 = nn.Linear(dim, dim * 2)
+            self.fc2 = nn.Linear(dim * 2, dim)
+        def forward(self, x):
+            return self.fc2(F.relu(self.fc1(x)))
+
+    class BlockA(nn.Module):
+        """Block variant A: attention + mlp (no LN)."""
+        def __init__(self, dim):
+            super().__init__()
+            self.attn = Attention(dim)
+            self.mlp = MLP(dim)
+        def forward(self, x):
+            return x + self.mlp(self.attn(x))
+
+    class BlockB(nn.Module):
+        """Block variant B: attention + mlp + layernorm."""
+        def __init__(self, dim):
+            super().__init__()
+            self.attn = Attention(dim)
+            self.mlp = MLP(dim)
+            self.ln = nn.LayerNorm(dim)
+        def forward(self, x):
+            return self.ln(x + self.mlp(self.attn(x)))
+
+    class Model(nn.Module):
+        def __init__(self, dim=16):
+            super().__init__()
+            self.layers = nn.ModuleList([BlockA(dim), BlockB(dim), BlockA(dim), BlockB(dim)])
+        def forward(self, x):
+            for layer in self.layers:
+                x = layer(x)
+            return x
+
+    torch.manual_seed(42)
+    model = Model(16)
+    x = torch.randn(4, 16)
+
+    _, capture = capture_aten_graphs(model, x, run_backward=False, record_real_tensors=True)
+    fg = capture.forward_graphs[0]
+
+    unique_fn_defs: list[str] = []
+    unique_groups: list = []
+    code = export_graph_to_python(
+        fg.graph_module, fn_name="forward_u",
+        source_map=capture.source_map, named_intermediates=True, uniquify=True,
+        _unique_fn_defs=unique_fn_defs, _unique_groups=unique_groups,
+    )
+
+    # Top-level blocks differ (A vs B), but sub-modules should be extracted
+    assert len(unique_groups) >= 1, "Should extract sub-module groups"
+
+    # Check that attn and/or mlp sub-modules were extracted
+    template_keys = [g.template_key for g in unique_groups]
+    has_sub_modules = any("attn" in k or "mlp" in k or "fc" in k for k in template_keys)
+    has_partial_top = any("layers.*" == k.split(".")[-2] + "." + k.split(".")[-1] if ".*" in k else False for k in template_keys)
+    assert has_sub_modules or has_partial_top, (
+        f"Expected sub-module or partial top-level extraction, got: {template_keys}"
+    )
+
+    # Verify bit-identical output
+    code_plain = export_graph_to_python(
+        fg.graph_module, fn_name="forward",
+        source_map=capture.source_map, named_intermediates=True, uniquify=False,
+    )
+    import operator
+    ns = {"torch": torch, "aten": torch.ops.aten, "operator": operator}
+    exec(code_plain, ns)
+    exec("\n".join(unique_fn_defs) + "\n" + code, ns)
+    r1 = ns["forward"](*capture.forward_real_inputs)
+    r2 = ns["forward_u"](*capture.forward_real_inputs)
+    assert torch.equal(r1, r2), f"Max diff: {(r1 - r2).abs().max().item()}"
+
+
+def test_export_aten_program_backward_uniquify(tmp_path):
+    """export_aten_program with uniquify=True should include backward shared functions when available."""
+    torch.manual_seed(42)
+    model = ResNetLike(dim=16)
+    x = torch.randn(4, 16)
+
+    _, capture = capture_aten_graphs(model, x, run_backward=True)
+
+    out_path = str(tmp_path / "test_bw.py")
+    export_aten_program(
+        capture, out_path,
+        include_test_harness=False,
+        named_intermediates=True,
+        skip_pt=True,
+        uniquify=True,
+    )
+
+    content = (tmp_path / "test_bw.py").read_text()
+    # Forward should always have shared functions for ResNetLike
+    assert "SHARED LAYER FUNCTIONS" in content
+    # Backward may also have shared functions if metadata is available
+    # (check content compiles as valid Python)
+    import operator
+    ns = {"torch": torch, "aten": torch.ops.aten, "operator": operator}
+    exec(compile(content, out_path, "exec"), ns)

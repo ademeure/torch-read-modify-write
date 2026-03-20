@@ -165,28 +165,86 @@ def graph_to_ir_json(
     return result
 
 
-def capture_to_ir_json(capture: Any, *, annotate: bool = True) -> dict[str, Any]:
+def _unique_groups_to_json(
+    capture: Any,
+    source_map: dict[str, Any] | None,
+) -> list[dict[str, Any]] | None:
+    """Run uniquification on forward graph and return JSON-serializable group summaries."""
+    fg = getattr(capture, "forward_graphs", None)
+    if not fg:
+        return None
+    try:
+        from torch_graph.export import (
+            export_graph_to_python,
+            _build_primal_map,
+            _UniqueGroup,
+        )
+
+        gm = fg[0].graph_module
+        primal_map = _build_primal_map(gm, capture)
+        groups_out: list[_UniqueGroup] = []
+        export_graph_to_python(
+            gm,
+            fn_name="forward",
+            primal_map=primal_map,
+            source_map=source_map,
+            named_intermediates=True,
+            uniquify=True,
+            _unique_groups=groups_out,
+        )
+        if not groups_out:
+            return None
+        return [
+            {
+                "fn_name": g.fn_name,
+                "template_key": g.template_key,
+                "module_type": g.module_type,
+                "num_instances": len(g.instances),
+                "instance_indices": g.instance_order,
+                "num_params": len(g.params),
+                "num_returns": len(g.returns),
+                "params": [{"name": p["name"], "annotation": p.get("annotation", "")} for p in g.params],
+                "returns": [{"name": r["name"], "annotation": r.get("annotation", "")} for r in g.returns],
+            }
+            for g in groups_out
+        ]
+    except Exception as e:
+        logger.debug(f"Unique group extraction for IR JSON failed: {e}")
+        return None
+
+
+def capture_to_ir_json(
+    capture: Any,
+    *,
+    annotate: bool = True,
+    include_unique_groups: bool = True,
+) -> dict[str, Any]:
     """Serialize a full capture as lossless IR JSON.
 
     When *annotate* is True (default), forward↔backward↔optimizer cross-graph
     links are added (backward_users, backward_grads, grad_of, optimizer_role,
     etc.) using the same logic as GraphVisualizer.to_json().
+
+    When *include_unique_groups* is True (default), a ``unique_groups`` key is
+    added listing the repeated module groups found by hierarchical
+    uniquification (template key, instance count, params, returns).
     """
     result: dict[str, Any] = {"schema": "torch_graph.ir_json_bundle/v1"}
+    source_map = getattr(capture, "source_map", None)
     if getattr(capture, "forward_graphs", None):
         fg = capture.forward_graphs[0]
         result["forward"] = graph_to_ir_json(
             fg.graph_module,
             fn_name="forward",
             capture=capture,
-            source_map=getattr(capture, "source_map", None),
+            source_map=source_map,
         )
     if getattr(capture, "backward_graphs", None):
         bg = capture.backward_graphs[0]
         result["backward"] = graph_to_ir_json(
             bg.graph_module,
             fn_name="backward",
-            source_map=getattr(capture, "source_map", None),
+            source_map=source_map,
         )
     opt_cap = getattr(capture, "optimizer_capture", None)
     if opt_cap and getattr(opt_cap, "forward_graphs", None):
@@ -205,6 +263,11 @@ def capture_to_ir_json(capture: Any, *, annotate: bool = True) -> dict[str, Any]
             _annotate_cross_graph_links(result, capture)
         except Exception as e:
             logger.debug(f"Cross-graph annotation failed: {e}")
+
+    if include_unique_groups:
+        ug = _unique_groups_to_json(capture, source_map)
+        if ug:
+            result["unique_groups"] = ug
 
     return result
 

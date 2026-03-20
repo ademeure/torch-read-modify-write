@@ -32,7 +32,7 @@ def init_once():
         "kernel_source": KERNEL_SRC,
         "inputs": [x.reshape(rows, cols).contiguous()],
         "expected": [torch.ops.aten.prod.dim_int(x, -1)],
-        "outputs": "float32;n=%d" % rows,
+        "outputs": ["float32;n=%d" % rows],
         "grid": (rows,),
         "block": (256,),
         "smem": 256 * 4,

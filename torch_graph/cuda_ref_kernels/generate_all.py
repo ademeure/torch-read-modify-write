@@ -180,7 +180,7 @@ def init_once():
         "kernel_source": KERNEL_SRC,
         "inputs": [x.reshape(rows, cols).contiguous()],
         "expected": [{aten_ref}],
-        "outputs": "float32;n=%d" % rows,
+        "outputs": ["float32;n=%d" % rows],
         "grid": (rows,),
         "block": (256,),
         "smem": 256 * 4,{atol_str}
@@ -459,7 +459,7 @@ extern "C" __global__ void aten_addcmul(
     }""",
     """inputs, kernel):
     n = inputs[0].numel()
-    return [kernel(inputs[0], params=[
+    return [kernel(*inputs, params=[
         kernel.in_ptr(0), kernel.in_ptr(1), kernel.in_ptr(2),
         kernel.out_ptr(0), np.float32(0.5), np.uint32(n),
     ])]""", needs_np=True)
@@ -484,7 +484,7 @@ extern "C" __global__ void aten_addcdiv(
     }""",
     """inputs, kernel):
     n = inputs[0].numel()
-    return [kernel(inputs[0], params=[
+    return [kernel(*inputs, params=[
         kernel.in_ptr(0), kernel.in_ptr(1), kernel.in_ptr(2),
         kernel.out_ptr(0), np.float32(0.5), np.uint32(n),
     ])]""", needs_np=True)
@@ -507,7 +507,7 @@ extern "C" __global__ void aten_masked_fill(
     }""",
     """inputs, kernel):
     n = inputs[0].numel()
-    return [kernel(inputs[0], params=[
+    return [kernel(*inputs, params=[
         kernel.in_ptr(0), kernel.in_ptr(1), kernel.out_ptr(0),
         np.float32(-1e9), np.uint32(n),
     ])]""", needs_np=True)
@@ -541,14 +541,14 @@ def init_once():
     B = torch.randn(K, N, device="cuda")
     return {
         "kernel_source": KERNEL_SRC, "inputs": [A, B],
-        "expected": [torch.ops.aten.mm.default(A, B)],
-        "outputs": "float32;n=%d" % (M * N),
+        "expected": [torch.ops.aten.mm.default(A, B).flatten()],
+        "outputs": ["float32;n=%d" % (M * N)],
         "grid": ((N + 15) // 16, (M + 15) // 16),
         "block": (16, 16), "atol": 1e-3,
     }
 
 def run(inputs, kernel):
-    return [kernel(inputs[0], params=[
+    return [kernel(*inputs, params=[
         kernel.in_ptr(0), kernel.in_ptr(1), kernel.out_ptr(0),
         np.uint32(M), np.uint32(K), np.uint32(N),
     ])]
@@ -582,14 +582,14 @@ def init_once():
     Bt = torch.randn(B, K, N, device="cuda")
     return {
         "kernel_source": KERNEL_SRC, "inputs": [A, Bt],
-        "expected": [torch.ops.aten.bmm.default(A, Bt)],
-        "outputs": "float32;n=%d" % (B * M * N),
+        "expected": [torch.ops.aten.bmm.default(A, Bt).flatten()],
+        "outputs": ["float32;n=%d" % (B * M * N)],
         "grid": ((N + 15) // 16, (M + 15) // 16, B),
         "block": (16, 16), "atol": 1e-3,
     }
 
 def run(inputs, kernel):
-    return [kernel(inputs[0], params=[
+    return [kernel(*inputs, params=[
         kernel.in_ptr(0), kernel.in_ptr(1), kernel.out_ptr(0),
         np.uint32(B), np.uint32(M), np.uint32(K), np.uint32(N),
     ])]
@@ -623,14 +623,14 @@ def init_once():
     B = torch.randn(K, N, device="cuda")
     return {
         "kernel_source": KERNEL_SRC, "inputs": [bias, A, B],
-        "expected": [torch.ops.aten.addmm.default(bias, A, B)],
-        "outputs": "float32;n=%d" % (M * N),
+        "expected": [torch.ops.aten.addmm.default(bias, A, B).flatten()],
+        "outputs": ["float32;n=%d" % (M * N)],
         "grid": ((N + 15) // 16, (M + 15) // 16),
         "block": (16, 16), "atol": 1e-3,
     }
 
 def run(inputs, kernel):
-    return [kernel(inputs[0], params=[
+    return [kernel(*inputs, params=[
         kernel.in_ptr(0), kernel.in_ptr(1), kernel.in_ptr(2), kernel.out_ptr(0),
         np.uint32(M), np.uint32(K), np.uint32(N),
     ])]
@@ -705,8 +705,8 @@ def init_once():
     x = torch.randn(ROWS, COLS, device="cuda")
     return {
         "kernel_source": KERNEL_SRC, "inputs": [x],
-        "expected": [torch.ops.aten.transpose.int(x, 0, 1).contiguous()],
-        "outputs": "float32;n=%d" % (ROWS * COLS),
+        "expected": [torch.ops.aten.transpose.int(x, 0, 1).contiguous().flatten()],
+        "outputs": ["float32;n=%d" % (ROWS * COLS)],
         "grid": ((COLS + 15) // 16, (ROWS + 15) // 16),
         "block": (16, 16),
     }
@@ -738,8 +738,8 @@ def init_once():
     x = torch.randn(ROWS, COLS, device="cuda")
     return {
         "kernel_source": KERNEL_SRC, "inputs": [x],
-        "expected": [torch.ops.aten.t.default(x).contiguous()],
-        "outputs": "float32;n=%d" % (ROWS * COLS),
+        "expected": [torch.ops.aten.t.default(x).contiguous().flatten()],
+        "outputs": ["float32;n=%d" % (ROWS * COLS)],
         "grid": ((COLS + 15) // 16, (ROWS + 15) // 16),
         "block": (16, 16),
     }

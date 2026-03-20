@@ -18,8 +18,8 @@ def init_once():
     x = torch.randn(ROWS, COLS, device="cuda")
     return {
         "kernel_source": KERNEL_SRC, "inputs": [x],
-        "expected": [torch.ops.aten.transpose.int(x, 0, 1).contiguous()],
-        "outputs": "float32;n=%d" % (ROWS * COLS),
+        "expected": [torch.ops.aten.transpose.int(x, 0, 1).contiguous().flatten()],
+        "outputs": ["float32;n=%d" % (ROWS * COLS)],
         "grid": ((COLS + 15) // 16, (ROWS + 15) // 16),
         "block": (16, 16),
     }

@@ -23,7 +23,7 @@ def init_once():
 
 def run(inputs, kernel):
     n = inputs[0].numel()
-    return [kernel(inputs[0], params=[
+    return [kernel(*inputs, params=[
         kernel.in_ptr(0), kernel.in_ptr(1), kernel.in_ptr(2),
         kernel.out_ptr(0), np.float32(0.5), np.uint32(n),
     ])]

@@ -12,9 +12,12 @@ ATOL = 1e-5
 
 def make_inputs(n=1024, seed=1):
     if seed == 0:
-        special = torch.tensor([0.0, -0.0, 1.0, -1.0, 0.5, 2.0, 4.0, 100.0, -100.0, 1e-7, 1e7, float("nan"), float("inf"), float("-inf")], device="cuda")
-        s = special.repeat((n + len(special) - 1) // len(special))[:n]
-        return [s, s.flip(0)]
+        # All special values paired with every other special value (cross-product)
+        special = torch.tensor([0.0, -0.0, 1.0, -1.0, 0.5, 2.0, 4.0, 100.0, -100.0, 1e-7, 1e7, 1e-45, -1e-45, 1.18e-38, -1.18e-38, float("nan"), float("inf"), float("-inf")], device="cuda")
+        m = len(special)
+        a = special.repeat_interleave(m).repeat((n + m*m - 1) // (m*m))[:n]
+        b = special.repeat(m).repeat((n + m*m - 1) // (m*m))[:n]
+        return [a, b]
     g = torch.Generator(device="cuda").manual_seed(seed)
     a = torch.randn(1024, device="cuda", generator=g)
     b = torch.randn(1024, device="cuda", generator=g)

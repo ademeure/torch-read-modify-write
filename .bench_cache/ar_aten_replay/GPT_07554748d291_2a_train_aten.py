@@ -361,6 +361,91 @@ def cuda_ce_softcap_bwd(grad_loss, log_softmax, targets, tanh_out, total_weight,
     ).view(tanh_out.shape)
 # ── End inline CUDA CE+softcap backward kernel ────────────────────────
 
+
+# ── Inline CUDA kernel: optimized softcap forward ────────────────────
+_cuda_softcap_fwd_cpp = """
+std::vector<torch::Tensor> cuda_softcap_fwd(torch::Tensor x, float softcap);
+"""
+
+_cuda_softcap_fwd_cu = r"""
+#include <torch/extension.h>
+#include <cuda_bf16.h>
+#include <math.h>
+
+__global__ void softcap_fwd_kernel(
+    const __nv_bfloat16* __restrict__ x,
+    float* __restrict__ out,
+    float* __restrict__ tanh_out,
+    float inv_softcap,
+    float softcap,
+    int64_t n
+) {
+    int64_t idx = (int64_t)blockIdx.x * blockDim.x + threadIdx.x;
+    // Process 4 elements per thread
+    idx *= 4;
+    if (idx + 3 < n) {
+        // Load 4 bf16 values
+        const __nv_bfloat162* x2 = reinterpret_cast<const __nv_bfloat162*>(x + idx);
+        float2 f0 = __bfloat1622float2(x2[0]);
+        float2 f1 = __bfloat1622float2(x2[1]);
+
+        // tanh(x / softcap) * softcap
+        float t0 = tanhf(f0.x * inv_softcap);
+        float t1 = tanhf(f0.y * inv_softcap);
+        float t2 = tanhf(f1.x * inv_softcap);
+        float t3 = tanhf(f1.y * inv_softcap);
+
+        // Store tanh values (for backward)
+        tanh_out[idx]     = t0;
+        tanh_out[idx + 1] = t1;
+        tanh_out[idx + 2] = t2;
+        tanh_out[idx + 3] = t3;
+
+        // Store softcapped values
+        out[idx]     = t0 * softcap;
+        out[idx + 1] = t1 * softcap;
+        out[idx + 2] = t2 * softcap;
+        out[idx + 3] = t3 * softcap;
+    } else {
+        for (int64_t i = idx; i < min(idx + 4, n); i++) {
+            float xf = __bfloat162float(x[i]);
+            float t = tanhf(xf * inv_softcap);
+            tanh_out[i] = t;
+            out[i] = t * softcap;
+        }
+    }
+}
+
+std::vector<torch::Tensor> cuda_softcap_fwd(torch::Tensor x, float softcap) {
+    int64_t n = x.numel();
+    auto out = torch::empty(x.sizes(), torch::dtype(torch::kFloat32).device(x.device()));
+    auto tanh_out = torch::empty(x.sizes(), torch::dtype(torch::kFloat32).device(x.device()));
+    int threads = 256;
+    int blocks = (n / 4 + threads - 1) / threads;
+    softcap_fwd_kernel<<<blocks, threads>>>(
+        reinterpret_cast<const __nv_bfloat16*>(x.data_ptr()),
+        out.data_ptr<float>(),
+        tanh_out.data_ptr<float>(),
+        1.0f / softcap, softcap, n
+    );
+    return {out, tanh_out};
+}
+"""
+
+_cuda_softcap_fwd_mod = torch.utils.cpp_extension.load_inline(
+    name="cuda_softcap_fwd_v2",
+    cpp_sources=_cuda_softcap_fwd_cpp,
+    cuda_sources=_cuda_softcap_fwd_cu,
+    functions=["cuda_softcap_fwd"],
+    verbose=False,
+)
+
+def cuda_softcap_fwd(x_bf16, softcap=15):
+    """Optimized CUDA softcap: bf16->fp32, tanh(x/sc)*sc. Returns (capped, tanh)."""
+    results = _cuda_softcap_fwd_mod.cuda_softcap_fwd(x_bf16.contiguous(), float(softcap))
+    return results[0], results[1]
+# ── End inline CUDA softcap forward kernel ────────────────────────────
+
 # ======================================================================
 # WEIGHTS / PARAMETERS
 # ======================================================================
@@ -1772,7 +1857,7 @@ def forward(
 
     # /.autoresearch_repo/train.py:279
     # logits = logits.float()
-    mul_88_mul, tanh_detach = triton_softcap_fwd(lm_head__unsafe_view, softcap=15)  # FUSED: softcap forward via Triton
+    mul_88_mul, tanh_detach = cuda_softcap_fwd(lm_head__unsafe_view, softcap=15)  # FUSED: softcap forward via Triton
 
     # /.autoresearch_repo/train.py:283
     # loss = F.cross_entropy(logits.view(-1, logits.size(-1)), targets.view(-1),

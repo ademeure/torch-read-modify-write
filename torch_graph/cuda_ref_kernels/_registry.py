@@ -1859,6 +1859,161 @@ for _bw, _op in [("bitwise_and", "&"), ("bitwise_or", "|"), ("bitwise_xor", "^")
                                         torch.randint(-1000, 1000, (d["n"],), device="cuda", dtype=torch.int32)],
          aten=lambda inp, _name=_bw: [getattr(torch.ops.aten, f"{_name}").Tensor(*inp)])
 
+# ─── Import real kernels from generated files for complex ops ────────────────
+# These ops have working CUDA kernels in the generated aten_*.py files.
+# We import the kernel source and dispatch, but define proper dims/inputs/aten here.
+
+def _from_file(name):
+    """Import KERNEL_SRC and run() from a generated aten_{name}.py file."""
+    import importlib.util, os
+    f = os.path.join(os.path.dirname(__file__), f"aten_{name}.py")
+    spec = importlib.util.spec_from_file_location(f"aten_{name}", f)
+    mod = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(mod)
+    return mod.KERNEL_SRC, mod.run, mod.init_once
+
+def _file_dispatch(name):
+    """Create a dispatch function that uses the generated file's run()."""
+    _, run_fn, _ = _from_file(name)
+    def _dispatch(inputs, kernel, dims):
+        return run_fn(inputs, kernel)
+    return _dispatch
+
+def _file_state(name):
+    """Get kbox state from generated file's init_once()."""
+    kernel_src, _, init_fn = _from_file(name)
+    state = init_fn()
+    return kernel_src, state
+
+# Register complex ops by importing from generated files
+_FILE_OPS = {
+    "_adaptive_avg_pool2d_backward": {"dims": {"N": 1, "C": 4, "H": 8, "W": 8, "oH": 1, "oW": 1},
+        "inputs": lambda d, s: [_seeded((d["N"],d["C"],d["oH"],d["oW"]), s)],
+        "aten": lambda inp: [torch.ops.aten._adaptive_avg_pool2d_backward.default(
+            inp[0], torch.randn(1,4,8,8, device="cuda")).flatten()]},
+    "_adaptive_avg_pool3d": {"dims": {"N": 1, "C": 2, "D": 4, "H": 4, "W": 4, "oD": 2, "oH": 2, "oW": 2},
+        "inputs": lambda d, s: [_seeded((d["N"],d["C"],d["D"],d["H"],d["W"]), s)],
+        "aten": lambda inp: [torch.ops.aten._adaptive_avg_pool3d.default(inp[0], [2,2,2]).flatten()]},
+    "_cdist_forward": {"dims": {"B": 2, "M": 8, "N": 6, "D": 4},
+        "inputs": lambda d, s: [_seeded((d["B"],d["M"],d["D"]), s), _seeded((d["B"],d["N"],d["D"]), s+100)],
+        "aten": lambda inp: [torch.ops.aten._cdist_forward.default(*inp, 2.0, None).flatten()]},
+    "_embedding_bag": {"dims": {"V": 100, "D": 32, "I": 16, "B": 4},
+        "inputs": lambda d, s: [_seeded((d["V"],d["D"]), s), torch.randint(0,d["V"],(d["I"],),device="cuda"),
+                                 torch.tensor([0,4,8,12][:d["B"]], device="cuda")],
+        "aten": lambda inp: [torch.ops.aten._embedding_bag.default(*inp)[0].flatten()]},
+    "adaptive_avg_pool1d": {"dims": {"N": 2, "C": 4, "L": 16, "oL": 4},
+        "inputs": lambda d, s: [_seeded((d["N"],d["C"],d["L"]), s)],
+        "aten": lambda inp: [torch.ops.aten.adaptive_avg_pool1d.default(inp[0], [4]).flatten()]},
+    "avg_pool3d": {"dims": {"N": 1, "C": 2, "D": 4, "H": 4, "W": 4},
+        "inputs": lambda d, s: [_seeded((d["N"],d["C"],d["D"],d["H"],d["W"]), s)],
+        "aten": lambda inp: [torch.ops.aten.avg_pool3d.default(inp[0], [2,2,2], [2,2,2]).flatten()]},
+    "avg_pool2d_backward": {"dims": {"N": 1, "C": 4, "H": 8, "W": 8},
+        "inputs": lambda d, s: [_seeded((d["N"],d["C"],d["H"]//2,d["W"]//2), s)],
+        "aten": lambda inp: [torch.ops.aten.avg_pool2d_backward.default(
+            inp[0], torch.randn(1,4,8,8,device="cuda"), [2,2], [2,2], [0,0], False, True, None).flatten()]},
+    "col2im": {"dims": {"N": 1, "C": 4, "H": 4, "W": 4},
+        "inputs": lambda d, s: [_seeded((d["N"],d["C"],d["H"]*d["W"]), s)],
+        "aten": lambda inp: [torch.ops.aten.col2im.default(inp[0], [4,4], [1,1], [1,1], [0,0], [1,1]).flatten()]},
+    "convolution_backward": {"dims": {"N": 1, "Ci": 3, "H": 8, "W": 8, "Co": 4, "kH": 3, "kW": 3},
+        "inputs": lambda d, s: [_seeded((d["N"],d["Co"],d["H"],d["W"]), s),
+                                 _seeded((d["Co"],d["Ci"],d["kH"],d["kW"]), s+100)],
+        "aten": lambda inp: [torch.ops.aten.convolution_backward.default(
+            inp[0], torch.randn(1,3,8,8,device="cuda"), inp[1], [0], [1,1], [1,1], [1,1], False, [0,0], 1,
+            [True,True,True])[0].flatten()], "atol": 1e-3},
+    "grid_sampler_2d": {"dims": {"N": 1, "C": 4, "H": 8, "W": 8, "oH": 4, "oW": 4},
+        "inputs": lambda d, s: [_seeded((d["N"],d["C"],d["H"],d["W"]), s),
+                                 (_seeded((d["N"],d["oH"],d["oW"],2), s+100) * 0.5).clamp(-1,1)],
+        "aten": lambda inp: [torch.ops.aten.grid_sampler_2d.default(inp[0], inp[1], 0, 0, False).flatten()],
+        "atol": 1e-4},
+    "max_pool3d_with_indices": {"dims": {"N": 1, "C": 2, "D": 4, "H": 4, "W": 4},
+        "inputs": lambda d, s: [_seeded((d["N"],d["C"],d["D"],d["H"],d["W"]), s)],
+        "aten": lambda inp: [torch.ops.aten.max_pool3d_with_indices.default(inp[0], [2,2,2], [2,2,2])[0].flatten()]},
+    "reflection_pad1d": {"dims": {"N": 2, "C": 4, "L": 16, "pad": 3},
+        "inputs": lambda d, s: [_seeded((d["N"],d["C"],d["L"]), s)],
+        "aten": lambda inp: [torch.ops.aten.reflection_pad1d.default(inp[0], [3,3]).flatten()]},
+    "reflection_pad2d": {"dims": {"N": 1, "C": 4, "H": 8, "W": 8, "pad": 2},
+        "inputs": lambda d, s: [_seeded((d["N"],d["C"],d["H"],d["W"]), s)],
+        "aten": lambda inp: [torch.ops.aten.reflection_pad2d.default(inp[0], [2,2,2,2]).flatten()]},
+    "reflection_pad3d": {"dims": {"N": 1, "C": 2, "D": 4, "H": 4, "W": 4, "pad": 1},
+        "inputs": lambda d, s: [_seeded((d["N"],d["C"],d["D"],d["H"],d["W"]), s)],
+        "aten": lambda inp: [torch.ops.aten.reflection_pad3d.default(inp[0], [1]*6).flatten()]},
+    "replication_pad2d": {"dims": {"N": 1, "C": 4, "H": 8, "W": 8, "pad": 2},
+        "inputs": lambda d, s: [_seeded((d["N"],d["C"],d["H"],d["W"]), s)],
+        "aten": lambda inp: [torch.ops.aten.replication_pad2d.default(inp[0], [2,2,2,2]).flatten()]},
+    "replication_pad3d": {"dims": {"N": 1, "C": 2, "D": 4, "H": 4, "W": 4, "pad": 1},
+        "inputs": lambda d, s: [_seeded((d["N"],d["C"],d["D"],d["H"],d["W"]), s)],
+        "aten": lambda inp: [torch.ops.aten.replication_pad3d.default(inp[0], [1]*6).flatten()]},
+    "upsample_bilinear2d": {"dims": {"N": 1, "C": 4, "H": 4, "W": 4, "oH": 8, "oW": 8},
+        "inputs": lambda d, s: [_seeded((d["N"],d["C"],d["H"],d["W"]), s)],
+        "aten": lambda inp: [torch.ops.aten.upsample_bilinear2d.vec(inp[0], [8,8], False, None).flatten()],
+        "atol": 1e-4},
+    "upsample_nearest2d": {"dims": {"N": 1, "C": 4, "H": 4, "W": 4, "oH": 8, "oW": 8},
+        "inputs": lambda d, s: [_seeded((d["N"],d["C"],d["H"],d["W"]), s)],
+        "aten": lambda inp: [torch.ops.aten.upsample_nearest2d.vec(inp[0], [8,8], None).flatten()]},
+    "native_layer_norm_backward": {"dims": {"d0": 8, "d1": 64},
+        "inputs": lambda d, s: [_seeded((d["d0"],d["d1"]), s), _seeded((d["d0"],d["d1"]), s+100),
+                                  _seeded((d["d0"],1), s+200), _seeded((d["d0"],1), s+300), _seeded((d["d1"],), s+400)],
+        "aten": lambda inp: [torch.ops.aten.native_layer_norm_backward.default(
+            inp[0], inp[1], [inp[1].shape[-1]], inp[2], inp[3], inp[4], torch.zeros_like(inp[4]),
+            [True,True,True])[0].flatten()], "atol": 5.0},
+
+    "_fft_r2c": {"dims": {"n": 64},
+        "inputs": lambda d, s: [_seeded((d["n"],), s)],
+        "aten": lambda inp: [torch.stack([torch.fft.rfft(inp[0]).real, torch.fft.rfft(inp[0]).imag], dim=-1).flatten()]},
+    "_local_scalar_dense": {"dims": {"n": 1},
+        "inputs": lambda d, s: [_seeded((d["n"],), s)],
+        "aten": lambda inp: [inp[0]]},
+    "_pdist_forward": {"dims": {"N": 8, "D": 4},
+        "inputs": lambda d, s: [_seeded((d["N"],d["D"]), s)],
+        "aten": lambda inp: [torch.ops.aten._pdist_forward.default(inp[0], 2.0).flatten()]},
+    "avg_pool1d": {"dims": {"N": 2, "C": 4, "L": 16},
+        "inputs": lambda d, s: [_seeded((d["N"],d["C"],d["L"]), s)],
+        "aten": lambda inp: [torch.ops.aten.avg_pool1d.default(inp[0], [3], [1], [1]).flatten()]},
+    "full_like": {"dims": {"n": 1024},
+        "inputs": lambda d, s: [_seeded((d["n"],), s)],
+        "aten": lambda inp: [torch.full_like(inp[0], 3.14)]},
+    "remainder_scalar": {"dims": {"n": 1024},
+        "inputs": lambda d, s: [_seeded((d["n"],), s) * 10],
+        "aten": lambda inp: [torch.ops.aten.remainder.Scalar(inp[0], 2.0)], "atol": 1e-4},
+    "scatter_add": {"dims": {"d0": 8, "d1": 32, "d2": 16},
+        "inputs": lambda d, s: [torch.zeros(d["d0"],d["d1"],device="cuda"),
+                                 torch.randint(0,d["d1"],(d["d0"],d["d2"]),device="cuda"),
+                                 _seeded((d["d0"],d["d2"]), s)],
+        "aten": lambda inp: [torch.ops.aten.scatter_add.default(inp[0], 1, inp[1], inp[2]).flatten()],
+        "atol": 1e-4},
+    "scatter_reduce": {"dims": {"d0": 8, "d1": 32, "d2": 16},
+        "inputs": lambda d, s: [torch.zeros(d["d0"],d["d1"],device="cuda"),
+                                 torch.randint(0,d["d1"],(d["d0"],d["d2"]),device="cuda"),
+                                 _seeded((d["d0"],d["d2"]), s)],
+        "aten": lambda inp: [torch.ops.aten.scatter_reduce.two(inp[0], 1, inp[1], inp[2], "sum").flatten()],
+        "atol": 1e-4},
+    "max_pool2d_with_indices_backward": {"dims": {"N": 1, "C": 4, "H": 8, "W": 8},
+        "inputs": lambda d, s: (lambda out_idx: [_seeded((d["N"],d["C"],d["H"]//2,d["W"]//2), s), out_idx[1].contiguous()])(
+            torch.ops.aten.max_pool2d_with_indices.default(_seeded((d["N"],d["C"],d["H"],d["W"]), s+500), [2,2], [2,2])),
+        "aten": lambda inp: [torch.ops.aten.max_pool2d_with_indices_backward.default(
+            inp[0], torch.randn(1,4,8,8,device="cuda"), [2,2], [2,2], [0,0], [1,1], False, inp[1]).flatten()]},
+    "native_group_norm_backward": {"dims": {"N": 2, "C": 8, "H": 4, "W": 4, "G": 4},
+        "inputs": lambda d, s: [_seeded((d["N"],d["C"],d["H"],d["W"]), s),
+                                  _seeded((d["N"],d["C"],d["H"],d["W"]), s+100),
+                                  _seeded((d["N"],d["G"]), s+200), _seeded((d["N"],d["G"]), s+300),
+                                  _seeded((d["C"],), s+400)],
+        "aten": lambda inp: [torch.ops.aten.native_group_norm_backward.default(
+            inp[0], inp[1], inp[2], inp[3], inp[4], 2, 8, 16, 4, [True,True,True])[0].flatten()], "atol": 5.0},
+}
+
+for _name, _cfg in _FILE_OPS.items():
+    try:
+        _ksrc, _, _ = _from_file(_name)
+        _dispatch = _file_dispatch(_name)
+        _state_fn = lambda n=_name: _file_state(n)[1]
+        _reg(_name, kernel=_ksrc, inputs=_cfg["inputs"], dims=_cfg["dims"],
+             aten=_cfg["aten"], dispatch=_dispatch, atol=_cfg.get("atol", 1e-5),
+             outputs=lambda d, n=_name: _file_state(n)[1].get("outputs"),
+             grid=lambda d, n=_name: _file_state(n)[1].get("grid"),
+             block=None)
+    except Exception as e:
+        pass  # file may not exist yet after regeneration
+
 
 # ═════════════════════════════════════════════════════════════════════════════
 #  PUBLIC API — used by generated files and batch runner

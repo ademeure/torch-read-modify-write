@@ -1,13 +1,9 @@
-"""Reference CUDA kernel for aten.relu."""
+"""Reference CUDA kernel for aten.relu.
+Run: kbox iterate torch_graph/cuda_ref_kernels/aten_relu.py --once
+"""
 import torch
-from torch_graph.cuda_ref_kernels._common import compile_cuda, check
-
-aten = torch.ops.aten
 
 KERNEL_SRC = r"""
-#include <cuda_runtime.h>
-#include <math.h>
-
 extern "C" __global__ void aten_relu(const float *in0, float *out0, unsigned int n) {
     unsigned int i = blockIdx.x * blockDim.x + threadIdx.x;
     if (i < n) {
@@ -15,22 +11,15 @@ extern "C" __global__ void aten_relu(const float *in0, float *out0, unsigned int
         out0[i] = ((x > 0.0f) ? x : 0.0f);
     }
 }
-
-torch::Tensor aten_relu_fwd(torch::Tensor in0) {
-    auto out0 = torch::empty_like(in0);
-    int n = in0.numel();
-    aten_relu<<<(n+255)/256, 256>>>(in0.data_ptr<float>(), out0.data_ptr<float>(), n);
-    return out0;
-}
 """
 
-def test():
-    ext = compile_cuda("aten_relu", KERNEL_SRC, ["aten_relu_fwd"])
+def init_once():
     x = torch.randn(1024, device='cuda')
-    result = ext.aten_relu_fwd(x)
-    expected = aten.relu.default(x)
-    check("aten.relu", result, expected)
-    print(f"PASS aten.relu")
+    return {
+        "kernel_source": KERNEL_SRC,
+        "inputs": [x],
+        "expected": [torch.ops.aten.relu.default(x)],
+    }
 
-if __name__ == "__main__":
-    test()
+def run(inputs, kernel):
+    return [kernel(*inputs)]

@@ -1,8 +1,12 @@
 """Reference CUDA kernels for ~150 aten ops — the complete PyTorch op vocabulary.
 
-One file per op. Each file has:
-  KERNEL_SRC: raw CUDA kernel string (naive reference implementation)
-  test(): compile, run with random tensors, compare to actual aten op (torch.ops.aten.*)
+One file per op, using the kernelbox init_once/run pattern:
+  KERNEL_SRC: raw CUDA kernel (extern "C" __global__ only, no C++ wrappers)
+  init_once(): inputs + expected via torch.ops.aten.*
+  run(inputs, kernel): execute via kernelbox — kernel(*inputs) or custom params
+
+Run one:  kbox iterate torch_graph/cuda_ref_kernels/aten_add.py --once
+Run all:  python torch_graph/cuda_ref_kernels/run_all_tests.py
 
 Categories covered:
   Elementwise unary (49):  abs, neg, exp, log, sqrt, relu, gelu, silu, sigmoid, tanh, ...

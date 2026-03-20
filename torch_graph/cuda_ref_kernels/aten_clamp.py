@@ -1,38 +1,25 @@
 """Reference CUDA kernel for aten.clamp — clamp to [min, max] range."""
 import torch
-from torch_graph.cuda_ref_kernels._common import compile_cuda, check
-
-aten = torch.ops.aten
+import numpy as np
 
 KERNEL_SRC = r"""
-#include <cuda_runtime.h>
-
 extern "C" __global__ void aten_clamp(
     const float *in0, float *out0, float lo, float hi, unsigned int n
 ) {
     unsigned int i = blockIdx.x * blockDim.x + threadIdx.x;
-    if (i < n) {
-        float x = in0[i];
-        out0[i] = fminf(fmaxf(x, lo), hi);
-    }
-}
-
-torch::Tensor aten_clamp_fwd(torch::Tensor in0, double lo, double hi) {
-    auto out0 = torch::empty_like(in0);
-    int n = in0.numel();
-    aten_clamp<<<(n+255)/256, 256>>>(
-        in0.data_ptr<float>(), out0.data_ptr<float>(), (float)lo, (float)hi, n);
-    return out0;
+    if (i < n) out0[i] = fminf(fmaxf(in0[i], lo), hi);
 }
 """
 
-def test():
-    ext = compile_cuda("aten_clamp", KERNEL_SRC, ["aten_clamp_fwd"])
+def init_once():
     x = torch.randn(1024, device='cuda') * 5
-    result = ext.aten_clamp_fwd(x, -1.0, 1.0)
-    expected = aten.clamp.default(x, -1.0, 1.0)
-    check("aten.clamp", result, expected)
-    print("PASS aten.clamp")
+    return {
+        "kernel_source": KERNEL_SRC, "inputs": [x],
+        "expected": [torch.ops.aten.clamp.default(x, -1.0, 1.0)],
+    }
 
-if __name__ == "__main__":
-    test()
+def run(inputs, kernel):
+    return [kernel(inputs[0], params=[
+        kernel.in_ptr(0), kernel.out_ptr(0),
+        np.float32(-1.0), np.float32(1.0), np.uint32(inputs[0].numel()),
+    ])]

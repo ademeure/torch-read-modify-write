@@ -1,13 +1,10 @@
-"""Reference CUDA kernel for aten.prod."""
+"""Reference CUDA kernel for aten.prod.
+Run: kbox iterate torch_graph/cuda_ref_kernels/aten_prod.py --once
+"""
 import torch
-from torch_graph.cuda_ref_kernels._common import compile_cuda, check
-
-aten = torch.ops.aten
+import numpy as np
 
 KERNEL_SRC = r"""
-#include <cuda_runtime.h>
-#include <math.h>
-
 extern "C" __global__ void aten_prod(
     const float *input, float *output, unsigned int rows, unsigned int cols
 ) {
@@ -25,30 +22,27 @@ extern "C" __global__ void aten_prod(
     }
     if (tid == 0) output[row] = sdata[0];
 }
-
-torch::Tensor aten_prod_fwd(torch::Tensor input, int dim) {
-    auto sizes = input.sizes();
-    int cols = sizes[sizes.size() - 1];
-    int rows = input.numel() / cols;
-    auto flat = input.reshape({rows, cols}).contiguous();
-    auto output = torch::empty({rows}, input.options());
-    int threads = 256;
-    aten_prod<<<rows, threads, threads * sizeof(float)>>>(
-        flat.data_ptr<float>(), output.data_ptr<float>(), rows, cols);
-    auto out_sizes = sizes.vec();
-    out_sizes.pop_back();
-    if (out_sizes.empty()) out_sizes.push_back(1);
-    return output.reshape(out_sizes);
-}
 """
 
-def test():
-    ext = compile_cuda("aten_prod", KERNEL_SRC, ["aten_prod_fwd"])
+def init_once():
     x = torch.rand(8, 16, device='cuda') + 0.5
-    result = ext.aten_prod_fwd(x, -1)
-    expected = aten.prod.dim_int(x, -1)
-    check("aten.prod", result, expected, atol=0.01)
-    print(f"PASS aten.prod")
+    cols = x.size(-1)
+    rows = x.numel() // cols
+    return {
+        "kernel_source": KERNEL_SRC,
+        "inputs": [x.reshape(rows, cols).contiguous()],
+        "expected": [torch.ops.aten.prod.dim_int(x, -1)],
+        "outputs": "float32;n=%d" % rows,
+        "grid": (rows,),
+        "block": (256,),
+        "smem": 256 * 4,
+        "atol": 0.01,
+    }
 
-if __name__ == "__main__":
-    test()
+def run(inputs, kernel):
+    x = inputs[0]
+    rows, cols = x.shape
+    return [kernel(x, params=[
+        kernel.in_ptr(0), kernel.out_ptr(0),
+        np.uint32(rows), np.uint32(cols),
+    ])]

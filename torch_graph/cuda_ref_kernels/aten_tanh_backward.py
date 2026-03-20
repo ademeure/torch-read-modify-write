@@ -1,13 +1,9 @@
-"""Reference CUDA kernel for aten.tanh_backward (backward gradient op)."""
+"""Reference CUDA kernel for aten.tanh_backward (backward gradient op).
+Run: kbox iterate torch_graph/cuda_ref_kernels/aten_tanh_backward.py --once
+"""
 import torch
-from torch_graph.cuda_ref_kernels._common import compile_cuda, check
-
-aten = torch.ops.aten
 
 KERNEL_SRC = r"""
-#include <cuda_runtime.h>
-#include <math.h>
-
 extern "C" __global__ void aten_tanh_backward(const float *grad, const float *saved, float *out0, unsigned int n) {
     unsigned int i = blockIdx.x * blockDim.x + threadIdx.x;
     if (i < n) {
@@ -16,23 +12,17 @@ extern "C" __global__ void aten_tanh_backward(const float *grad, const float *sa
         out0[i] = (g * (1.0f - s * s));
     }
 }
-
-torch::Tensor aten_tanh_backward_fwd(torch::Tensor grad, torch::Tensor saved) {
-    auto out0 = torch::empty_like(grad);
-    int n = grad.numel();
-    aten_tanh_backward<<<(n+255)/256, 256>>>(grad.data_ptr<float>(), saved.data_ptr<float>(), out0.data_ptr<float>(), n);
-    return out0;
-}
 """
 
-def test():
-    ext = compile_cuda("aten_tanh_backward", KERNEL_SRC, ["aten_tanh_backward_fwd"])
+def init_once():
     grad = torch.randn(1024, device='cuda')
     saved = torch.tanh(torch.randn(1024, device='cuda'))
-    result = ext.aten_tanh_backward_fwd(grad, saved)
-    expected = aten.tanh_backward.default(grad, saved)
-    check("aten.tanh_backward", result, expected, atol=1e-05)
-    print(f"PASS aten.tanh_backward")
+    return {
+        "kernel_source": KERNEL_SRC,
+        "inputs": [grad, saved],
+        "expected": [torch.ops.aten.tanh_backward.default(grad, saved)],
+        "atol": 1e-05,
+    }
 
-if __name__ == "__main__":
-    test()
+def run(inputs, kernel):
+    return [kernel(*inputs)]

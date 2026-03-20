@@ -114,6 +114,32 @@ def triton_softcap_fwd(x_bf16, softcap=15):
     return out, tanh_out
 # ── End Triton softcap forward kernel ────────────────────────────────
 
+# ── Triton softcap backward kernel ───────────────────────────────────
+import triton
+import triton.language as tl
+
+@triton.jit
+def _softcap_bwd_kernel(
+    grad_ptr, tanh_ptr, out_ptr, n,
+    BLOCK: tl.constexpr,
+):
+    pid = tl.program_id(0)
+    offs = pid * BLOCK + tl.arange(0, BLOCK)
+    mask = offs < n
+    g = tl.load(grad_ptr + offs, mask=mask).to(tl.float32)
+    t = tl.load(tanh_ptr + offs, mask=mask).to(tl.float32)
+    # d/dx [softcap * tanh(x/softcap)] = 1 - tanh^2(x/softcap)
+    out = g * (1.0 - t * t)
+    tl.store(out_ptr + offs, out.to(tl.bfloat16), mask=mask)
+
+def triton_softcap_bwd(grad_fp32, tanh_fp32):
+    """Fused softcap backward: grad * (1 - tanh^2) -> bf16."""
+    n = grad_fp32.numel()
+    out = torch.empty(grad_fp32.shape, dtype=torch.bfloat16, device=grad_fp32.device)
+    _softcap_bwd_kernel[((n + 1023) // 1024,)](grad_fp32, tanh_fp32, out, n, BLOCK=1024)
+    return out
+# ── End Triton softcap backward kernel ───────────────────────────────
+
 # ======================================================================
 # WEIGHTS / PARAMETERS
 # ======================================================================
@@ -2084,14 +2110,7 @@ def backward(
 
     # /.autoresearch_repo/train.py:280
     # logits = softcap * torch.tanh(logits / softcap)
-    grad_mul_88_mul: 'float32[32, 2048, 8192]' = aten.mul.Tensor(grad_view_36_view, 15)  # strides=(16777216, 8192, 1), contiguous=True, view=False
-    grad_tanh_detach: 'float32[32, 2048, 8192]' = aten.detach(detach_54)  # strides=(16777216, 8192, 1), contiguous=True, view=True
-    grad_tanh_tanh_backward: 'float32[32, 2048, 8192]' = aten.tanh_backward(grad_mul_88_mul, grad_tanh_detach)  # strides=(16777216, 8192, 1), contiguous=True, view=False
-    grad_truediv_div: 'float32[32, 2048, 8192]' = aten.div.Tensor(grad_tanh_tanh_backward, 15)  # strides=(16777216, 8192, 1), contiguous=True, view=False
-
-    # /.autoresearch_repo/train.py:279
-    # logits = logits.float()
-    grad_float_1__to_copy: 'bfloat16[32, 2048, 8192]' = aten._to_copy(grad_truediv_div, dtype=torch.bfloat16, layout=torch.strided, device=torch.device('cuda:0'))  # strides=(16777216, 8192, 1), contiguous=True, view=False
+    grad_float_1__to_copy: 'bfloat16[32, 2048, 8192]' = triton_softcap_bwd(grad_view_36_view, detach_54)  # FUSED: softcap backward via Triton
 
     # ════════════════════════════════════════════════════════════════
     # self.lm_head

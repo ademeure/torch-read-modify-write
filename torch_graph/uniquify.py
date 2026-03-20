@@ -567,7 +567,8 @@ def uniquify_ir(
         ir_graph: IR dict with ``"nodes"``, ``"placeholders"``, ``"returns"``
             keys (as produced by ``graph_to_ir()``).
         strategy: Grouping strategy — ``"module"`` (nn.Module hierarchy),
-            ``"source_line"`` (source file + line), or ``"both"``
+            ``"source_line"`` (source file + line), ``"both_fallback"``
+            (module first, source_line for leftovers), or ``"both_nested"``
             (module first, source_line for leftovers).
         depth: Max depth levels.  ``1`` = top-level only, ``-1`` = all.
         min_ops: Minimum ops for a group to be extracted.
@@ -580,19 +581,22 @@ def uniquify_ir(
         name_remap = {}
 
     # Phase 1: Build templates based on strategy
+    is_nested = strategy == "both_nested"
+    is_fallback = strategy in ("both", "both_fallback")
+
     if strategy == "module":
         templates, template_types = _group_by_module(ir_nodes)
     elif strategy == "source_line":
         templates, template_types = _group_by_source_line(ir_nodes)
-    elif strategy == "both":
-        # Module first at depth=1, then source_line for leftovers
+    elif is_fallback or is_nested:
         templates, template_types = _group_by_module(ir_nodes)
-        # source_line templates will be added after module processing
-        # (handled in the main loop below)
     else:
-        raise ValueError(f"Unknown strategy: {strategy!r}. Use 'module', 'source_line', or 'both'.")
+        raise ValueError(
+            f"Unknown strategy: {strategy!r}. "
+            "Use 'module', 'source_line', 'both_fallback', or 'both_nested'."
+        )
 
-    group_type = strategy if strategy != "both" else "module"
+    group_type = "module" if (is_fallback or is_nested) else strategy
 
     # Sort by depth (shallowest first)
     sorted_keys = sorted(templates.keys(), key=lambda t: (t.count("."), t))
@@ -660,10 +664,85 @@ def uniquify_ir(
                     groups.append(group)
                     extracted.update(group.all_node_names)
 
-    _process_templates(templates, template_types, group_type, depth_limit)
+    if is_nested:
+        # both_nested: extract leaf functions FIRST (sub-module patterns shared
+        # across different top-level module variants), then top-level module
+        # functions from the leftovers.
+        #
+        # Uses the DEEPEST module templates as leaf candidates (e.g.,
+        # self.layers.*.mlp, self.layers.*.q) — these are the sub-modules
+        # that might be shared across even_block and odd_block.  When source
+        # file/line info is available, source_line grouping is also tried for
+        # non-module nodes.
+        #
+        # Process deepest-first for leaf extraction, then shallowest for
+        # module-level grouping.
+        leaf_keys = sorted(templates.keys(), key=lambda t: (t.count("."), t), reverse=True)
+        if depth_limit is not None:
+            # For nested: depth_limit restricts the TOP-level, not the leaf level.
+            # Extract leaves at all depths, then restrict top-level.
+            leaf_depth_limit = None
+        else:
+            leaf_depth_limit = None
 
-    # For "both" strategy: run source_line on ungrouped nodes
-    if strategy == "both":
+        # Determine which depth is "top level" — shallowest template depth
+        if sorted_keys:
+            top_depth = sorted_keys[0].count(".")
+        else:
+            top_depth = 0
+
+        # Phase A: Extract leaf functions (deeper than top level)
+        for key in leaf_keys:
+            if key.count(".") <= top_depth:
+                continue  # skip top-level, those come in Phase B
+            raw_instances = templates[key]
+            filtered: dict[str, list[dict]] = {}
+            for idx, nodes in raw_instances.items():
+                remaining = [n for n in nodes if n["name"] not in extracted]
+                if remaining:
+                    filtered[idx] = remaining
+            if len(filtered) < 2:
+                continue
+            instance_sigs: dict[str, tuple] = {}
+            for idx, nodes in filtered.items():
+                group_names = {n["name"] for n in nodes}
+                instance_sigs[idx] = build_structural_signature(nodes, group_names)
+            if len(instance_sigs) < 2:
+                continue
+            sig_buckets: dict[tuple, list[str]] = defaultdict(list)
+            for idx, sig in instance_sigs.items():
+                sig_buckets[sig].append(idx)
+            for _sig, matching in sig_buckets.items():
+                if len(matching) < 2:
+                    continue
+                if min_ops > 0 and len(filtered.get(matching[0], [])) < min_ops:
+                    continue
+                node_positions = {n["name"]: i for i, n in enumerate(ir_nodes)}
+                instance_order = sorted(matching, key=lambda idx: node_positions.get(
+                    filtered[idx][0]["name"], 0) if filtered[idx] else 0)
+                subset = {idx: filtered[idx] for idx in matching}
+                group = _build_group(
+                    key, "source_line", template_types[key],
+                    subset, instance_order,
+                    ir_nodes, ir_returns, name_remap,
+                )
+                if group is not None:
+                    groups.append(group)
+                    extracted.update(group.all_node_names)
+
+        # Also try source_line grouping if source info is available
+        sl_templates, sl_types = _group_by_source_line(
+            [n for n in ir_nodes if n["name"] not in extracted])
+        if sl_templates:
+            _process_templates(sl_templates, sl_types, "source_line", None)
+
+        # Phase B: Module-level grouping on remaining nodes (top level)
+        _process_templates(templates, template_types, "module", depth_limit)
+    else:
+        _process_templates(templates, template_types, group_type, depth_limit)
+
+    # both_fallback: source_line on ungrouped nodes
+    if is_fallback:
         ungrouped = [n for n in ir_nodes if n["name"] not in extracted]
         if ungrouped:
             sl_templates, sl_types = _group_by_source_line(ungrouped)

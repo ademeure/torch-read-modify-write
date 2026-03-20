@@ -168,12 +168,86 @@ dicts instead of live FX nodes.
 This reproduces kbox_gen's `_normalize_replay` approach but using structural
 signatures instead of text comparison, which is more robust.
 
-#### `strategy="both"` (new)
+#### `strategy="both_fallback"` (implemented)
 
 Run module strategy first at depth=1 (top-level blocks).  For nodes NOT captured
 by a top-level module group, fall back to source_line grouping.  This gets the
 best of both: block-level extraction where modules match, plus fine-grained
 source-line extraction for the glue code between blocks.
+
+#### `strategy="both_nested"` (planned — key for cross-variant dedup)
+
+**Goal**: minimize total unique lines of code by extracting shared sub-patterns
+as leaf functions, then having module-level functions call them.
+
+Algorithm:
+1. Run source_line grouping across ALL nodes (not just leftovers).  Identify
+   source-line groups that repeat across different module instances — e.g.,
+   ``model.py:48`` (a linear projection) appears identically inside both
+   ``even_block_0`` and ``even_block_1``.
+2. Extract those as leaf functions (``linear()``, ``mlp()``, etc.) — but only
+   when they can actually be combined/uniquified (same structural signature
+   across instances, same constraints as all other uniquification).
+3. Mark those nodes as "extracted at leaf level".
+4. Run module grouping on the remaining (non-leaf) nodes.  The module-level
+   functions now contain fewer ops (the leaf ops were extracted), so
+   ``even_block_0`` and ``even_block_1`` might become more similar — or at
+   least shorter.
+5. When generating body code for module-level functions, check if any node
+   belongs to a leaf-level group.  If so, emit a **call** to the leaf function
+   instead of inlining the ops.
+
+**Example**: 8-layer transformer with even/odd block variants:
+
+```python
+# Leaf functions (shared across ALL 8 layers, both variants):
+def linear_nobias(x, weight):  # from model.py:74 — q/k/v/proj projections
+    t = aten.t(weight)
+    view = aten.view(x, [...])
+    mm = aten.mm(view, t)
+    return (aten._unsafe_view(mm, [...]),)
+
+def mlp(x, fc_w, fc_b, proj_w, proj_b):  # from model.py:82-83
+    ...  # 9 ops
+    return (out,)
+
+# Module functions (call leaf functions instead of inlining):
+def even_block(x, q_w, k_w, v_w, proj_w, mlp_params, ln_w, ln_b):
+    h = layer_norm(x, ln_w, ln_b)
+    q = linear_nobias(h, q_w)    # ← call, not 4 inlined ops
+    k = linear_nobias(h, k_w)
+    v = linear_nobias(h, v_w)
+    ...  # attention math (not extractable — unique to this level)
+    x = x + linear_nobias(attn_out, proj_w)
+    x = x + mlp(ln2_out, *mlp_params)  # ← call, not 9 inlined ops
+    return x
+
+def odd_block(x, q_w, k_w, v_w, proj_w, gate_w, mlp_params, ln_w, ln_b):
+    h = layer_norm(x, ln_w, ln_b)
+    q = linear_nobias(h, q_w)
+    k = linear_nobias(h, k_w)
+    v = linear_nobias(h, v_w)
+    v = v * sigmoid(linear_nobias(h, gate_w))  # ← extra ops (gate)
+    ...  # attention math
+    x = x + linear_nobias(attn_out, proj_w)
+    x = x + mlp(ln2_out, *mlp_params)
+    return x
+```
+
+**Key constraint**: Leaf extraction only happens when the source-line group
+actually produces identical structural signatures across instances.  Two
+``nn.Linear`` calls with different shapes are NOT combined — the structural
+signature includes literal shape values and would differ.
+
+**Implementation notes**:
+- Requires a "nested call" mechanism in ``_build_group``: when generating body
+  code for a module-level group, detect nodes already in a leaf group and emit
+  ``leaf_fn(args)`` instead of the raw ops.
+- The leaf groups' ``all_node_names`` must be excluded from the module-level
+  groups' node lists, but the module-level function still needs to know about
+  them to emit the call site.
+- Function ordering in the output: leaf functions first, then module functions
+  that call them.
 
 ### Structural signature (shared by all strategies)
 

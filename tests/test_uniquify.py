@@ -681,3 +681,108 @@ def test_export_aten_program_backward_uniquify(tmp_path):
     import operator
     ns = {"torch": torch, "aten": torch.ops.aten, "operator": operator}
     exec(compile(content, out_path, "exec"), ns)
+
+
+# ---------------------------------------------------------------------------
+# Configurable depth / min_ops tests
+# ---------------------------------------------------------------------------
+
+
+def test_uniquify_depth_1_top_level_only():
+    """uniquify_depth=1 should only extract top-level groups, no sub-modules."""
+    torch.manual_seed(42)
+    model = ResNetLike(dim=16)
+    x = torch.randn(4, 16)
+
+    _, capture = capture_aten_graphs(model, x, run_backward=False)
+    fg = capture.forward_graphs[0]
+
+    groups_d1: list = []
+    export_graph_to_python(
+        fg.graph_module, fn_name="forward",
+        source_map=capture.source_map, named_intermediates=True,
+        uniquify=True, uniquify_depth=1, _unique_groups=groups_d1,
+    )
+    # Depth 1 should produce the top-level ResidualBlock group
+    assert len(groups_d1) >= 1
+    # All groups should be at the shallowest depth (same dot count)
+    depths = {g.template_key.count(".") for g in groups_d1}
+    assert len(depths) == 1, f"Depth=1 should produce groups at one level only, got depths: {depths}"
+
+
+def test_uniquify_depth_controls_sub_module_extraction():
+    """uniquify_depth=1 vs -1 should differ when top-level is heterogeneous."""
+    class BlockA(nn.Module):
+        def __init__(self, dim):
+            super().__init__()
+            self.fc = nn.Linear(dim, dim)
+        def forward(self, x):
+            return F.relu(self.fc(x))
+
+    class BlockB(nn.Module):
+        def __init__(self, dim):
+            super().__init__()
+            self.fc = nn.Linear(dim, dim)
+            self.ln = nn.LayerNorm(dim)
+        def forward(self, x):
+            return self.ln(self.fc(x))
+
+    class Model(nn.Module):
+        def __init__(self, dim=16):
+            super().__init__()
+            self.blocks = nn.ModuleList([BlockA(dim), BlockB(dim)])
+        def forward(self, x):
+            for b in self.blocks:
+                x = b(x)
+            return x
+
+    torch.manual_seed(42)
+    model = Model(16)
+    x = torch.randn(4, 16)
+    _, capture = capture_aten_graphs(model, x, run_backward=False)
+    fg = capture.forward_graphs[0]
+
+    # Depth 1: top-level only — blocks are heterogeneous, no groups
+    groups_d1: list = []
+    export_graph_to_python(
+        fg.graph_module, fn_name="forward",
+        source_map=capture.source_map, named_intermediates=True,
+        uniquify=True, uniquify_depth=1, _unique_groups=groups_d1,
+    )
+    assert len(groups_d1) == 0, "Depth=1 with heterogeneous blocks should find nothing"
+
+    # Depth -1 (unlimited): should find the shared Linear sub-module
+    groups_all: list = []
+    export_graph_to_python(
+        fg.graph_module, fn_name="forward",
+        source_map=capture.source_map, named_intermediates=True,
+        uniquify=True, uniquify_depth=-1, _unique_groups=groups_all,
+    )
+    assert len(groups_all) >= 1, "Depth=-1 should extract shared sub-modules"
+
+
+def test_uniquify_min_ops_filters_small_groups():
+    """uniquify_min_ops should prevent extraction of small groups."""
+    torch.manual_seed(42)
+    model = ResNetLike(dim=16)
+    x = torch.randn(4, 16)
+    _, capture = capture_aten_graphs(model, x, run_backward=False)
+    fg = capture.forward_graphs[0]
+
+    # With a very high min_ops, nothing should be extracted
+    groups_high: list = []
+    export_graph_to_python(
+        fg.graph_module, fn_name="forward",
+        source_map=capture.source_map, named_intermediates=True,
+        uniquify=True, uniquify_min_ops=9999, _unique_groups=groups_high,
+    )
+    assert len(groups_high) == 0, "min_ops=9999 should prevent all extraction"
+
+    # With min_ops=0 (default), extraction should work
+    groups_low: list = []
+    export_graph_to_python(
+        fg.graph_module, fn_name="forward",
+        source_map=capture.source_map, named_intermediates=True,
+        uniquify=True, uniquify_min_ops=0, _unique_groups=groups_low,
+    )
+    assert len(groups_low) >= 1, "min_ops=0 should allow extraction"

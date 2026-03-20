@@ -2399,6 +2399,9 @@ def _detect_unique_groups(
     name_remap: dict[str, str],
     source_map: dict | None,
     is_backward: bool,
+    *,
+    max_depth: int = -1,
+    min_ops: int = 0,
 ) -> list[_UniqueGroup]:
     """Detect repeated structurally-identical module groups, with hierarchical fallback.
 
@@ -2430,10 +2433,21 @@ def _detect_unique_groups(
     # before sub-module groups.  Ties broken alphabetically for determinism.
     sorted_templates = sorted(all_templates.keys(), key=lambda t: (t.count("."), t))
 
+    # Compute depth limit from max_depth (relative to shallowest template)
+    if max_depth > 0 and sorted_templates:
+        base_depth = sorted_templates[0].count(".")
+        depth_limit = base_depth + max_depth - 1
+    else:
+        depth_limit = None  # no limit
+
     groups: list[_UniqueGroup] = []
     extracted_nodes: set[str] = set()  # nodes already in a group — skip at deeper levels
 
     for template in sorted_templates:
+        # Enforce depth limit
+        if depth_limit is not None and template.count(".") > depth_limit:
+            continue
+
         raw_instances = all_templates[template]
 
         # Filter out nodes already extracted at a shallower depth
@@ -2468,6 +2482,12 @@ def _detect_unique_groups(
         for _sig, matching_idxs in sig_buckets.items():
             if len(matching_idxs) < 2:
                 continue
+
+            # Enforce min_ops threshold
+            if min_ops > 0:
+                first_idx = matching_idxs[0]
+                if len(instance_ir.get(first_idx, [])) < min_ops:
+                    continue
 
             # Determine graph order for this subset
             instance_first_pos: dict[str, int] = {}
@@ -2573,6 +2593,8 @@ def export_graph_to_python(
     dynamic_dims_comment: str | None = None,
     kernel_map: dict[str, str] | None = None,
     uniquify: bool = False,
+    uniquify_depth: int = -1,
+    uniquify_min_ops: int = 0,
     _unique_fn_defs: list[str] | None = None,
     _unique_groups: list | None = None,
 ) -> str:
@@ -2591,6 +2613,11 @@ def export_graph_to_python(
         kernel_map: Optional mapping of FX node → Triton kernel name.
         uniquify: If True, detect repeated identical module groups and extract
             them into shared helper functions called from the main body.
+        uniquify_depth: How many depth levels to try.  ``1`` = top-level only
+            (e.g. ``transformer.h.*``).  ``2`` = also try one sub-module level.
+            ``-1`` (default) = all depths.
+        uniquify_min_ops: Minimum aten ops for a group to be extracted.
+            Groups with fewer ops are skipped.  ``0`` (default) = no minimum.
         _unique_fn_defs: When *uniquify* is True, append generated helper
             function definition strings to this list (caller uses them to
             emit a SHARED LAYER FUNCTIONS section).
@@ -2690,6 +2717,7 @@ def export_graph_to_python(
     if uniquify:
         unique_groups = _detect_unique_groups(
             compute_nodes, ir_nodes_by_name, name_remap, source_map, is_backward,
+            max_depth=uniquify_depth, min_ops=uniquify_min_ops,
         )
         for group in unique_groups:
             if _unique_fn_defs is not None:
@@ -3008,6 +3036,8 @@ def export_aten_program(
     kernel_map: dict[str, str] | None = None,
     skip_pt: bool = False,
     uniquify: bool = True,
+    uniquify_depth: int = -1,
+    uniquify_min_ops: int = 0,
     emit_cuda_stubs: bool = False,
 ) -> Path:
     """Export full forward+backward as a standalone Python program.
@@ -3084,6 +3114,8 @@ def export_aten_program(
             dynamic_dims_comment=dynamic_dims_comment,
             kernel_map=kernel_map,
             uniquify=uniquify,
+            uniquify_depth=uniquify_depth,
+            uniquify_min_ops=uniquify_min_ops,
             _unique_fn_defs=unique_fn_defs,
             _unique_groups=unique_groups_out,
         )
@@ -3102,6 +3134,8 @@ def export_aten_program(
             named_intermediates=named_intermediates,
             dynamic_dims_comment=dynamic_dims_comment,
             uniquify=uniquify,
+            uniquify_depth=uniquify_depth,
+            uniquify_min_ops=uniquify_min_ops,
             _unique_fn_defs=bw_unique_fn_defs,
         )
 

@@ -88,147 +88,10 @@ _dev_parser.add_argument("--rtol", type=float, default=None, help="Relative tole
 _dev_args, _ = _dev_parser.parse_known_args()
 _device = "cpu" if _dev_args.cpu else ("cuda" if torch.cuda.is_available() else "cpu")
 
-# ── Triton softcap forward kernel ────────────────────────────────────
-import triton
-import triton.language as tl
-from triton.language.extra.cuda import libdevice as _libdevice
 
-@triton.jit
-def _softcap_fwd_kernel(
-    x_ptr, out_ptr, tanh_ptr, n,
-    softcap: tl.constexpr, BLOCK: tl.constexpr,
-):
-    pid = tl.program_id(0)
-    offs = pid * BLOCK + tl.arange(0, BLOCK)
-    mask = offs < n
-    x = tl.load(x_ptr + offs, mask=mask).to(tl.float32)
-    t = _libdevice.tanh(x / softcap)
-    tl.store(out_ptr + offs, t * softcap, mask=mask)
-    tl.store(tanh_ptr + offs, t, mask=mask)
 
-def triton_softcap_fwd(x_bf16, softcap=15):
-    """Fused softcap: bf16->fp32, div, tanh, mul. Returns (softcapped_fp32, tanh_fp32)."""
-    n = x_bf16.numel()
-    out = torch.empty(x_bf16.shape, dtype=torch.float32, device=x_bf16.device)
-    tanh_out = torch.empty(x_bf16.shape, dtype=torch.float32, device=x_bf16.device)
-    _softcap_fwd_kernel[((n + 1023) // 1024,)](x_bf16, out, tanh_out, n, softcap=softcap, BLOCK=1024)
-    return out, tanh_out
-# ── End Triton softcap forward kernel ────────────────────────────────
 
-# ── Triton softcap backward kernel ───────────────────────────────────
-import triton
-import triton.language as tl
 
-@triton.jit
-def _softcap_bwd_kernel(
-    grad_ptr, tanh_ptr, out_ptr, n,
-    BLOCK: tl.constexpr,
-):
-    pid = tl.program_id(0)
-    offs = pid * BLOCK + tl.arange(0, BLOCK)
-    mask = offs < n
-    g = tl.load(grad_ptr + offs, mask=mask).to(tl.float32)
-    t = tl.load(tanh_ptr + offs, mask=mask).to(tl.float32)
-    # d/dx [softcap * tanh(x/softcap)] = 1 - tanh^2(x/softcap)
-    out = g * (1.0 - t * t)
-    tl.store(out_ptr + offs, out.to(tl.bfloat16), mask=mask)
-
-def triton_softcap_bwd(grad_fp32, tanh_fp32):
-    """Fused softcap backward: grad * (1 - tanh^2) -> bf16."""
-    n = grad_fp32.numel()
-    out = torch.empty(grad_fp32.shape, dtype=torch.bfloat16, device=grad_fp32.device)
-    _softcap_bwd_kernel[((n + 1023) // 1024,)](grad_fp32, tanh_fp32, out, n, BLOCK=1024)
-    return out
-# ── End Triton softcap backward kernel ───────────────────────────────
-
-# ── Triton lambda scaling kernel ─────────────────────────────────────
-import triton
-import triton.language as tl
-
-@triton.jit
-def _lambda_scale_kernel(
-    x_ptr, x0_ptr, out_ptr, a_scalar, b_scalar, n,
-    BLOCK: tl.constexpr,
-):
-    pid = tl.program_id(0)
-    offs = pid * BLOCK + tl.arange(0, BLOCK)
-    mask = offs < n
-    x = tl.load(x_ptr + offs, mask=mask).to(tl.float32)
-    x0 = tl.load(x0_ptr + offs, mask=mask).to(tl.float32)
-    out = a_scalar * x + b_scalar * x0
-    tl.store(out_ptr + offs, out.to(tl.bfloat16), mask=mask)
-
-def triton_lambda_scale(x, x0, a_scalar, b_scalar):
-    """Fused: a*x + b*x0 in one kernel."""
-    n = x.numel()
-    out = torch.empty_like(x)
-    a_val = a_scalar.item() if hasattr(a_scalar, 'item') else float(a_scalar)
-    b_val = b_scalar.item() if hasattr(b_scalar, 'item') else float(b_scalar)
-    _lambda_scale_kernel[((n + 1023) // 1024,)](x, x0, out, a_val, b_val, n, BLOCK=1024)
-    return out
-# ── End Triton lambda scaling kernel ─────────────────────────────────
-
-# ── Triton squared ReLU backward kernel ──────────────────────────────
-import triton
-import triton.language as tl
-
-@triton.jit
-def _sqrelu_bwd_kernel(
-    grad_ptr, relu_fp32_ptr, relu_bf16_ptr, out_ptr, n,
-    BLOCK: tl.constexpr,
-):
-    pid = tl.program_id(0)
-    offs = pid * BLOCK + tl.arange(0, BLOCK)
-    mask = offs < n
-    g = tl.load(grad_ptr + offs, mask=mask).to(tl.float32)
-    r = tl.load(relu_fp32_ptr + offs, mask=mask).to(tl.float32)
-    rb = tl.load(relu_bf16_ptr + offs, mask=mask)
-    # d/dx [relu(x)^2] = 2*relu(x) * (x > 0); threshold_backward handles (x > 0)
-    # Combined: grad * 2 * relu * (relu_bf16 > 0) -> bf16
-    deriv = g * 2.0 * r
-    out = tl.where(rb > 0, deriv, 0.0)
-    tl.store(out_ptr + offs, out.to(tl.bfloat16), mask=mask)
-
-def cuda_sqrelu_bwd(grad_fp32, relu_fp32, relu_bf16):
-    """Fused squared ReLU backward: grad * 2 * relu * (relu > 0) -> bf16."""
-    n = grad_fp32.numel()
-    out = torch.empty(grad_fp32.shape, dtype=torch.bfloat16, device=grad_fp32.device)
-    _sqrelu_bwd_kernel[((n + 1023) // 1024,)](grad_fp32, relu_fp32, relu_bf16, out, n, BLOCK=1024)
-    return out
-# ── End Triton squared ReLU backward kernel ──────────────────────────
-
-# ── Triton squared ReLU forward kernel ───────────────────────────────
-import triton
-import triton.language as tl
-
-@triton.jit
-def _sqrelu_fwd_kernel(
-    x_ptr, relu_bf16_ptr, relu_fp32_ptr, sq_bf16_ptr, n,
-    BLOCK: tl.constexpr,
-):
-    pid = tl.program_id(0)
-    offs = pid * BLOCK + tl.arange(0, BLOCK)
-    mask = offs < n
-    x = tl.load(x_ptr + offs, mask=mask)
-    # relu in bf16
-    r_bf16 = tl.where(x > 0, x, 0.0)
-    tl.store(relu_bf16_ptr + offs, r_bf16, mask=mask)
-    # relu in fp32 for backward
-    r_fp32 = r_bf16.to(tl.float32)
-    tl.store(relu_fp32_ptr + offs, r_fp32, mask=mask)
-    # squared in bf16 for c_proj input
-    sq = (r_fp32 * r_fp32).to(tl.bfloat16)
-    tl.store(sq_bf16_ptr + offs, sq, mask=mask)
-
-def cuda_sqrelu_fwd(x_bf16):
-    """Fused relu + square: returns (relu_bf16, relu_fp32, squared_bf16)."""
-    n = x_bf16.numel()
-    relu_bf16 = torch.empty_like(x_bf16)
-    relu_fp32 = torch.empty(x_bf16.shape, dtype=torch.float32, device=x_bf16.device)
-    sq_bf16 = torch.empty_like(x_bf16)
-    _sqrelu_fwd_kernel[((n + 1023) // 1024,)](x_bf16, relu_bf16, relu_fp32, sq_bf16, n, BLOCK=1024)
-    return relu_bf16, relu_fp32, sq_bf16
-# ── End Triton squared ReLU forward kernel ───────────────────────────
 
 
 # ── Torch-native fused RoPE ────────────────────────────────────────────
@@ -619,6 +482,131 @@ def cuda_sqrelu_bwd(grad, relu_fp32, relu_bf16):
     return _cuda_sqrelu_bwd_mod.cuda_sqrelu_bwd(grad.contiguous(), relu_fp32.contiguous(), relu_bf16.contiguous())
 # ── End inline CUDA squared relu backward kernel ─────────────────────
 
+
+# ── Inline CUDA kernel: fused lambda scaling ─────────────────────────
+_cuda_lambda_cpp = "torch::Tensor cuda_lambda_scale(torch::Tensor x, torch::Tensor x0, float a, float b);"
+
+_cuda_lambda_cu = r"""
+#include <torch/extension.h>
+#include <cuda_bf16.h>
+
+__global__ void lambda_scale_kernel(
+    const __nv_bfloat16* __restrict__ x,
+    const __nv_bfloat16* __restrict__ x0,
+    __nv_bfloat16* __restrict__ out,
+    float a, float b, int64_t n
+) {
+    int64_t idx = (int64_t)blockIdx.x * blockDim.x + threadIdx.x;
+    idx *= 4;
+    if (idx + 3 < n) {
+        const __nv_bfloat162* x2 = reinterpret_cast<const __nv_bfloat162*>(x + idx);
+        const __nv_bfloat162* x02 = reinterpret_cast<const __nv_bfloat162*>(x0 + idx);
+        float2 xf0 = __bfloat1622float2(x2[0]);
+        float2 xf1 = __bfloat1622float2(x2[1]);
+        float2 x0f0 = __bfloat1622float2(x02[0]);
+        float2 x0f1 = __bfloat1622float2(x02[1]);
+
+        __nv_bfloat162* out2 = reinterpret_cast<__nv_bfloat162*>(out + idx);
+        out2[0] = __floats2bfloat162_rn(a*xf0.x + b*x0f0.x, a*xf0.y + b*x0f0.y);
+        out2[1] = __floats2bfloat162_rn(a*xf1.x + b*x0f1.x, a*xf1.y + b*x0f1.y);
+    } else {
+        for (int64_t i = idx; i < min(idx + 4, n); i++) {
+            float xf = __bfloat162float(x[i]);
+            float x0f = __bfloat162float(x0[i]);
+            out[i] = __float2bfloat16(a * xf + b * x0f);
+        }
+    }
+}
+
+torch::Tensor cuda_lambda_scale(torch::Tensor x, torch::Tensor x0, float a, float b) {
+    int64_t n = x.numel();
+    auto out = torch::empty_like(x);
+    int threads = 256;
+    int blocks = (n / 4 + threads - 1) / threads;
+    lambda_scale_kernel<<<blocks, threads>>>(
+        reinterpret_cast<const __nv_bfloat16*>(x.data_ptr()),
+        reinterpret_cast<const __nv_bfloat16*>(x0.data_ptr()),
+        reinterpret_cast<__nv_bfloat16*>(out.data_ptr()),
+        a, b, n
+    );
+    return out;
+}
+"""
+
+_cuda_lambda_mod = torch.utils.cpp_extension.load_inline(
+    name="cuda_lambda_scale_v1",
+    cpp_sources=_cuda_lambda_cpp,
+    cuda_sources=_cuda_lambda_cu,
+    functions=["cuda_lambda_scale"],
+    verbose=False,
+)
+
+def cuda_lambda_scale_fn(x, x0, a_scalar, b_scalar):
+    """Fused a*x + b*x0 in single CUDA kernel."""
+    return _cuda_lambda_mod.cuda_lambda_scale(
+        x.contiguous(), x0.contiguous(),
+        a_scalar.item() if hasattr(a_scalar, 'item') else float(a_scalar),
+        b_scalar.item() if hasattr(b_scalar, 'item') else float(b_scalar),
+    )
+# ── End inline CUDA lambda scale kernel ──────────────────────────────
+
+
+# ── Inline CUDA kernel: fused softcap backward ──────────────────────
+_cuda_softcap_bwd_cpp = "torch::Tensor cuda_softcap_bwd(torch::Tensor grad, torch::Tensor tanh_out);"
+
+_cuda_softcap_bwd_cu = r"""
+#include <torch/extension.h>
+#include <cuda_bf16.h>
+
+__global__ void softcap_bwd_kernel(
+    const float* __restrict__ grad,
+    const float* __restrict__ tanh_out,
+    __nv_bfloat16* __restrict__ out,
+    int64_t n
+) {
+    int64_t idx = (int64_t)blockIdx.x * blockDim.x + threadIdx.x;
+    idx *= 4;
+    if (idx + 3 < n) {
+        float g0 = grad[idx], g1 = grad[idx+1], g2 = grad[idx+2], g3 = grad[idx+3];
+        float t0 = tanh_out[idx], t1 = tanh_out[idx+1], t2 = tanh_out[idx+2], t3 = tanh_out[idx+3];
+
+        __nv_bfloat162* out2 = reinterpret_cast<__nv_bfloat162*>(out + idx);
+        out2[0] = __floats2bfloat162_rn(g0*(1.0f-t0*t0), g1*(1.0f-t1*t1));
+        out2[1] = __floats2bfloat162_rn(g2*(1.0f-t2*t2), g3*(1.0f-t3*t3));
+    } else {
+        for (int64_t i = idx; i < min(idx + 4, n); i++) {
+            float g = grad[i], t = tanh_out[i];
+            out[i] = __float2bfloat16(g * (1.0f - t*t));
+        }
+    }
+}
+
+torch::Tensor cuda_softcap_bwd(torch::Tensor grad, torch::Tensor tanh_out) {
+    int64_t n = grad.numel();
+    auto out = torch::empty(grad.sizes(), torch::dtype(torch::kBFloat16).device(grad.device()));
+    int threads = 256;
+    int blocks = (n / 4 + threads - 1) / threads;
+    softcap_bwd_kernel<<<blocks, threads>>>(
+        grad.data_ptr<float>(), tanh_out.data_ptr<float>(),
+        reinterpret_cast<__nv_bfloat16*>(out.data_ptr()), n
+    );
+    return out;
+}
+"""
+
+_cuda_softcap_bwd_mod = torch.utils.cpp_extension.load_inline(
+    name="cuda_softcap_bwd_v1",
+    cpp_sources=_cuda_softcap_bwd_cpp,
+    cuda_sources=_cuda_softcap_bwd_cu,
+    functions=["cuda_softcap_bwd"],
+    verbose=False,
+)
+
+def cuda_softcap_bwd_fn(grad_fp32, tanh_fp32, softcap=15):
+    """Fused softcap backward: grad * (1 - tanh^2) -> bf16."""
+    return _cuda_softcap_bwd_mod.cuda_softcap_bwd(grad_fp32.contiguous(), tanh_fp32.contiguous())
+# ── End inline CUDA softcap backward kernel ──────────────────────────
+
 # ======================================================================
 # WEIGHTS / PARAMETERS
 # ======================================================================
@@ -875,7 +863,7 @@ def forward(
     # x = self.resid_lambdas[i] * x + self.x0_lambdas[i] * x0
     getitem_2_select: 'float32[]' = aten.select.int(resid_lambdas, 0, 0)
     getitem_3_select: 'float32[]' = aten.select.int(x0_lambdas, 0, 0)
-    add_add = triton_lambda_scale(rms_norm_getitem, rms_norm_getitem, getitem_2_select, getitem_3_select)  # FUSED: lambda scaling via Triton
+    add_add = cuda_lambda_scale_fn(rms_norm_getitem, rms_norm_getitem, getitem_2_select, getitem_3_select)  # FUSED: lambda scaling via Triton
 
     # ════════════════════════════════════════════════════════════════
     # self.transformer.h.0
@@ -1014,7 +1002,7 @@ def forward(
     # x = self.resid_lambdas[i] * x + self.x0_lambdas[i] * x0
     getitem_8_select: 'float32[]' = aten.select.int(resid_lambdas, 0, 1)
     getitem_9_select: 'float32[]' = aten.select.int(x0_lambdas, 0, 1)
-    add_8_add = triton_lambda_scale(h0_add_1, rms_norm_getitem, getitem_8_select, getitem_9_select)  # FUSED: lambda scaling via Triton
+    add_8_add = cuda_lambda_scale_fn(h0_add_1, rms_norm_getitem, getitem_8_select, getitem_9_select)  # FUSED: lambda scaling via Triton
 
     # ════════════════════════════════════════════════════════════════
     # self.value_embeds.1 (Embedding)
@@ -1169,7 +1157,7 @@ def forward(
     # x = self.resid_lambdas[i] * x + self.x0_lambdas[i] * x0
     getitem_15_select: 'float32[]' = aten.select.int(resid_lambdas, 0, 2)
     getitem_16_select: 'float32[]' = aten.select.int(x0_lambdas, 0, 2)
-    add_17_add = triton_lambda_scale(h1_add_1, rms_norm_getitem, getitem_15_select, getitem_16_select)  # FUSED: lambda scaling via Triton
+    add_17_add = cuda_lambda_scale_fn(h1_add_1, rms_norm_getitem, getitem_15_select, getitem_16_select)  # FUSED: lambda scaling via Triton
 
     # ════════════════════════════════════════════════════════════════
     # self.transformer.h.2
@@ -1296,7 +1284,7 @@ def forward(
     # x = self.resid_lambdas[i] * x + self.x0_lambdas[i] * x0
     getitem_21_select: 'float32[]' = aten.select.int(resid_lambdas, 0, 3)
     getitem_22_select: 'float32[]' = aten.select.int(x0_lambdas, 0, 3)
-    add_25_add = triton_lambda_scale(h2_add_1, rms_norm_getitem, getitem_21_select, getitem_22_select)  # FUSED: lambda scaling via Triton
+    add_25_add = cuda_lambda_scale_fn(h2_add_1, rms_norm_getitem, getitem_21_select, getitem_22_select)  # FUSED: lambda scaling via Triton
 
     # ════════════════════════════════════════════════════════════════
     # self.value_embeds.3 (Embedding)
@@ -1450,7 +1438,7 @@ def forward(
     # x = self.resid_lambdas[i] * x + self.x0_lambdas[i] * x0
     getitem_28_select: 'float32[]' = aten.select.int(resid_lambdas, 0, 4)
     getitem_29_select: 'float32[]' = aten.select.int(x0_lambdas, 0, 4)
-    add_33_add = triton_lambda_scale(h3_add_1, rms_norm_getitem, getitem_28_select, getitem_29_select)  # FUSED: lambda scaling via Triton
+    add_33_add = cuda_lambda_scale_fn(h3_add_1, rms_norm_getitem, getitem_28_select, getitem_29_select)  # FUSED: lambda scaling via Triton
 
     # ════════════════════════════════════════════════════════════════
     # self.transformer.h.4
@@ -1577,7 +1565,7 @@ def forward(
     # x = self.resid_lambdas[i] * x + self.x0_lambdas[i] * x0
     getitem_34_select: 'float32[]' = aten.select.int(resid_lambdas, 0, 5)
     getitem_35_select: 'float32[]' = aten.select.int(x0_lambdas, 0, 5)
-    add_41_add = triton_lambda_scale(h4_add_1, rms_norm_getitem, getitem_34_select, getitem_35_select)  # FUSED: lambda scaling via Triton
+    add_41_add = cuda_lambda_scale_fn(h4_add_1, rms_norm_getitem, getitem_34_select, getitem_35_select)  # FUSED: lambda scaling via Triton
 
     # ════════════════════════════════════════════════════════════════
     # self.value_embeds.5 (Embedding)
@@ -1732,7 +1720,7 @@ def forward(
     # x = self.resid_lambdas[i] * x + self.x0_lambdas[i] * x0
     getitem_41_select: 'float32[]' = aten.select.int(resid_lambdas, 0, 6)
     getitem_42_select: 'float32[]' = aten.select.int(x0_lambdas, 0, 6)
-    add_50_add = triton_lambda_scale(h5_add_1, rms_norm_getitem, getitem_41_select, getitem_42_select)  # FUSED: lambda scaling via Triton
+    add_50_add = cuda_lambda_scale_fn(h5_add_1, rms_norm_getitem, getitem_41_select, getitem_42_select)  # FUSED: lambda scaling via Triton
 
     # ════════════════════════════════════════════════════════════════
     # self.transformer.h.6
@@ -1859,7 +1847,7 @@ def forward(
     # x = self.resid_lambdas[i] * x + self.x0_lambdas[i] * x0
     getitem_47_select: 'float32[]' = aten.select.int(resid_lambdas, 0, 7)
     getitem_48_select: 'float32[]' = aten.select.int(x0_lambdas, 0, 7)
-    add_58_add = triton_lambda_scale(h6_add_1, rms_norm_getitem, getitem_47_select, getitem_48_select)  # FUSED: lambda scaling via Triton
+    add_58_add = cuda_lambda_scale_fn(h6_add_1, rms_norm_getitem, getitem_47_select, getitem_48_select)  # FUSED: lambda scaling via Triton
 
     # ════════════════════════════════════════════════════════════════
     # self.value_embeds.7 (Embedding)

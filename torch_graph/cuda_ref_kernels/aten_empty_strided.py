@@ -1,7 +1,7 @@
-"""Reference CUDA kernel for aten.empty."""
+"""Reference CUDA kernel for aten.empty_strided."""
 import torch, numpy as np
 KERNEL_SRC = r"""
-extern "C" __global__ void aten_empty_kernel(float *out0, unsigned int n) {
+extern "C" __global__ void aten_empty_strided_kernel(float *out0, unsigned int n) {
     unsigned int i = blockIdx.x * blockDim.x + threadIdx.x;
     if (i < n) out0[i] = 0.0f;
 }

@@ -183,6 +183,15 @@ def main():
                     inputs = state.get("inputs", [])
                     exp = state.get("expected", [])
 
+                if exp == "skip":
+                    # RNG ops etc — just verify kernel runs without error
+                    if needs_kernel and "kernel_source" in state:
+                        run_fn(inputs, session)
+                    else:
+                        run_fn(inputs)
+                    all_ok = True
+                    break
+
                 if needs_kernel and "kernel_source" in state:
                     result = run_fn(inputs, session)
                 elif needs_kernel:

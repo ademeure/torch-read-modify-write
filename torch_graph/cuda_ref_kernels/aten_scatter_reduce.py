@@ -1,16 +1,14 @@
-"""Reference CUDA kernel for aten.scatter_add."""
+"""Reference CUDA kernel for aten.scatter_reduce (sum)."""
 import torch, numpy as np
 KERNEL_SRC = r"""
-extern "C" __global__ void aten_scatter_add_k(
+extern "C" __global__ void aten_scatter_reduce_k(
     const float *self, const long *index, const float *src, float *out,
     unsigned int rows, unsigned int self_cols, unsigned int src_cols, unsigned int total_self
 ) {
     unsigned int idx = blockIdx.x * blockDim.x + threadIdx.x;
-    // Phase 1: copy self to out
     if (idx < total_self) out[idx] = self[idx];
-    // Phase 2: atomic scatter add (only if idx < src total)
     if (idx < rows * src_cols) {
-        unsigned int r = idx / src_cols, c = idx % src_cols;
+        unsigned int r = idx / src_cols;
         atomicAdd(&out[r * self_cols + index[idx]], src[idx]);
     }
 }
@@ -21,7 +19,7 @@ def init_once():
     src = torch.randn(8, 16, device="cuda")
     total = x.numel()
     return {"kernel_source": KERNEL_SRC, "inputs": [x, idx, src],
-            "expected": [torch.ops.aten.scatter_add.default(x, 1, idx, src).flatten()],
+            "expected": [torch.ops.aten.scatter_reduce.two(x, 1, idx, src, "sum").flatten()],
             "outputs": ["float32;n=%d" % total], "grid": ((total + 255) // 256,), "atol": 1e-4}
 def run(inputs, kernel):
     total = inputs[0].numel()

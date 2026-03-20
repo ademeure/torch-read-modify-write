@@ -162,6 +162,68 @@ def run(inputs, kernel):
     return [kernel(*inputs)]
 '''
 
+# ─── 1f. Scalar binary (tensor op scalar) ────────────────────────────────────
+
+SCALAR_OP_TEMPLATE = '''"""Reference CUDA kernel for aten.{op_name} (scalar variant)."""
+import torch
+
+KERNEL_SRC = r"""
+extern "C" __global__ void {func_name}(const float *in0, float *out0, unsigned int n) {{
+    unsigned int i = blockIdx.x * blockDim.x + threadIdx.x;
+    if (i < n) {{ float x = in0[i]; out0[i] = {cuda_expr}; }}
+}}
+"""
+
+ATOL = {atol_val}
+
+def make_inputs(n=1024, seed=1):
+    if seed == 0:
+        special = torch.tensor([0.0, -0.0, 1.0, -1.0, 0.5, 2.0, 4.0, 100.0, -100.0, 1e-7, 1e7, 1e-45, -1e-45, 1.18e-38, -1.18e-38, float("nan"), float("inf"), float("-inf")], device="cuda")
+        return [special.repeat((n + len(special) - 1) // len(special))[:n]]
+    g = torch.Generator(device="cuda").manual_seed(seed)
+    return [torch.randn(n, device="cuda", generator=g)]
+
+def expected(inputs):
+    x = inputs[0]
+    return [{aten_ref_fn}]
+
+def init_once():
+    inputs = make_inputs()
+    return {{"kernel_source": KERNEL_SRC, "inputs": inputs, "expected": expected(inputs), "atol": ATOL}}
+
+def run(inputs, kernel):
+    return [kernel(*inputs)]
+'''
+
+SCALAR_CMP_TEMPLATE = '''"""Reference CUDA kernel for aten.{op_name} (scalar comparison)."""
+import torch
+
+KERNEL_SRC = r"""
+extern "C" __global__ void {func_name}(const float *in0, float *out0, unsigned int n) {{
+    unsigned int i = blockIdx.x * blockDim.x + threadIdx.x;
+    if (i < n) {{ float x = in0[i]; out0[i] = {cuda_expr}; }}
+}}
+"""
+
+def make_inputs(n=1024, seed=1):
+    if seed == 0:
+        special = torch.tensor([0.0, -0.0, 1.0, -1.0, 0.5, 2.0, 4.0, 100.0, -100.0, 1e-7, 1e7, 1e-45, -1e-45, 1.18e-38, -1.18e-38, float("nan"), float("inf"), float("-inf")], device="cuda")
+        return [special.repeat((n + len(special) - 1) // len(special))[:n]]
+    g = torch.Generator(device="cuda").manual_seed(seed)
+    return [torch.randn(n, device="cuda", generator=g)]
+
+def expected(inputs):
+    x = inputs[0]
+    return [{aten_ref_fn}.float()]
+
+def init_once():
+    inputs = make_inputs()
+    return {{"kernel_source": KERNEL_SRC, "inputs": inputs, "expected": expected(inputs)}}
+
+def run(inputs, kernel):
+    return [kernel(*inputs)]
+'''
+
 # ─── 1e. Reduction (input, output, rows, cols) — custom params, static smem ──
 
 REDUCTION_TEMPLATE = '''"""Reference CUDA kernel for aten.{op_name}.
@@ -313,6 +375,16 @@ BINARY_OPS = [
     ("copysign", "aten_copysign", "copysignf(a, b)",
      "a = torch.randn(1024, device='cuda')\n    b = torch.randn(1024, device='cuda')",
      "torch.ops.aten.copysign.Tensor(a, b)", None),
+    # Logical binary (operate on float, treat nonzero as true)
+    ("logical_and", "aten_logical_and", "((a != 0.0f && b != 0.0f) ? 1.0f : 0.0f)",
+     "a = torch.randn(1024, device='cuda')\n    b = torch.randn(1024, device='cuda')",
+     "torch.ops.aten.logical_and.default(a, b).float()", None),
+    ("logical_or", "aten_logical_or", "((a != 0.0f || b != 0.0f) ? 1.0f : 0.0f)",
+     "a = torch.randn(1024, device='cuda')\n    b = torch.randn(1024, device='cuda')",
+     "torch.ops.aten.logical_or.default(a, b).float()", None),
+    ("logical_xor", "aten_logical_xor", "(((a != 0.0f) != (b != 0.0f)) ? 1.0f : 0.0f)",
+     "a = torch.randn(1024, device='cuda')\n    b = torch.randn(1024, device='cuda')",
+     "torch.ops.aten.logical_xor.default(a, b).float()", None),
 ]
 
 COMPARISON_OPS = [
@@ -322,6 +394,28 @@ COMPARISON_OPS = [
     ("ge", "aten_ge", "(a >= b ? 1.0f : 0.0f)", "torch.ops.aten.ge.Tensor(a, b)"),
     ("lt", "aten_lt", "(a < b ? 1.0f : 0.0f)", "torch.ops.aten.lt.Tensor(a, b)"),
     ("le", "aten_le", "(a <= b ? 1.0f : 0.0f)", "torch.ops.aten.le.Tensor(a, b)"),
+]
+
+# Scalar variants: same kernel as unary but the aten op takes (tensor, scalar)
+# Using scalar=2.0 as test value
+SCALAR_OPS = [
+    # (op_name, func_name, cuda_expr, aten_ref_fn, atol, scalar_val)
+    ("add_scalar", "aten_add_scalar", "(x + 2.0f)", "torch.ops.aten.add.Scalar(inputs[0], 2.0)", 1e-5),
+    ("sub_scalar", "aten_sub_scalar", "(x - 2.0f)", "torch.ops.aten.sub.Scalar(inputs[0], 2.0)", 1e-5),
+    ("mul_scalar", "aten_mul_scalar", "(x * 2.0f)", "torch.ops.aten.mul.Scalar(inputs[0], 2.0)", 1e-5),
+    ("div_scalar", "aten_div_scalar", "(x / 2.0f)", "torch.ops.aten.div.Scalar(inputs[0], 2.0)", 1e-5),
+    ("pow_tensor_scalar", "aten_pow_ts", "powf(x, 2.0f)", "torch.ops.aten.pow.Tensor_Scalar(inputs[0], 2.0)", 1e-4),
+    ("fmod_scalar", "aten_fmod_scalar", "fmodf(x, 2.0f)", "torch.ops.aten.fmod.Scalar(inputs[0], 2.0)", 1e-5),
+]
+
+SCALAR_CMP_OPS = [
+    # (op_name, func_name, cuda_expr, aten_ref_fn)
+    ("eq_scalar", "aten_eq_scalar", "(x == 0.0f ? 1.0f : 0.0f)", "torch.ops.aten.eq.Scalar(inputs[0], 0.0)"),
+    ("ne_scalar", "aten_ne_scalar", "(x != 0.0f ? 1.0f : 0.0f)", "torch.ops.aten.ne.Scalar(inputs[0], 0.0)"),
+    ("gt_scalar", "aten_gt_scalar", "(x > 0.0f ? 1.0f : 0.0f)", "torch.ops.aten.gt.Scalar(inputs[0], 0.0)"),
+    ("ge_scalar", "aten_ge_scalar", "(x >= 0.0f ? 1.0f : 0.0f)", "torch.ops.aten.ge.Scalar(inputs[0], 0.0)"),
+    ("lt_scalar", "aten_lt_scalar", "(x < 0.0f ? 1.0f : 0.0f)", "torch.ops.aten.lt.Scalar(inputs[0], 0.0)"),
+    ("le_scalar", "aten_le_scalar", "(x <= 0.0f ? 1.0f : 0.0f)", "torch.ops.aten.le.Scalar(inputs[0], 0.0)"),
 ]
 
 BACKWARD_OPS = [
@@ -3099,6 +3193,502 @@ def run(inputs):
     return [inputs[0].detach()]
 '''
 
+# ─── Missing Core Aten IR ops ───────────────────────────────────────────────
+# Rename variants of ops we already have
+
+HAND_CRAFTED["_adaptive_avg_pool2d"] = '''"""Reference CUDA kernel for aten._adaptive_avg_pool2d (alias for adaptive_avg_pool2d)."""
+import torch
+import numpy as np
+# Reuse the adaptive_avg_pool2d kernel
+from torch_graph.cuda_ref_kernels.aten_adaptive_avg_pool2d import KERNEL_SRC, make_inputs, expected
+
+def init_once():
+    inputs = make_inputs() if callable(getattr(__import__('torch_graph.cuda_ref_kernels.aten_adaptive_avg_pool2d', fromlist=['make_inputs']), 'make_inputs', None)) else None
+    if inputs is None:
+        x = torch.randn(1, 4, 8, 8, device="cuda")
+        inputs = [x.contiguous()]
+    return {"kernel_source": KERNEL_SRC, "inputs": inputs, "expected": [torch.ops.aten._adaptive_avg_pool2d.default(inputs[0], [1, 1]).flatten()],
+            "outputs": ["float32;n=%d" % (inputs[0].size(0) * inputs[0].size(1))],
+            "grid": ((inputs[0].size(0) * inputs[0].size(1) + 255) // 256,)}
+
+def run(inputs, kernel):
+    return [kernel(*inputs)]
+'''
+
+# max_pool2d_with_indices — same kernel as our max_pool2d
+HAND_CRAFTED["max_pool2d_with_indices"] = '''"""Reference CUDA kernel for aten.max_pool2d_with_indices."""
+import torch
+from torch_graph.cuda_ref_kernels.aten_max_pool2d import KERNEL_SRC
+
+def init_once():
+    x = torch.randn(1, 4, 8, 8, device="cuda")
+    expected = torch.ops.aten.max_pool2d_with_indices.default(x, [2,2], [2,2])
+    total = expected[0].numel()
+    return {"kernel_source": KERNEL_SRC, "inputs": [x.contiguous()],
+            "expected": [expected[0].flatten()],
+            "outputs": ["float32;n=%d" % total],
+            "grid": ((total + 255) // 256,), "block": (256,)}
+
+def run(inputs, kernel):
+    return [kernel(*inputs)]
+'''
+
+# _native_batch_norm_legit — same kernel as our native_batch_norm
+HAND_CRAFTED["_native_batch_norm_legit"] = '''"""Reference CUDA kernel for aten._native_batch_norm_legit (eval mode with running stats)."""
+import torch
+from torch_graph.cuda_ref_kernels.aten_native_batch_norm import KERNEL_SRC
+
+def init_once():
+    x = torch.randn(2, 8, 4, 4, device="cuda")
+    w = torch.randn(8, device="cuda")
+    b = torch.randn(8, device="cuda")
+    rm = torch.randn(8, device="cuda")
+    rv = torch.rand(8, device="cuda") + 0.1
+    total = x.numel()
+    return {"kernel_source": KERNEL_SRC, "inputs": [x.contiguous(), w, b, rm, rv],
+            "expected": [torch.ops.aten._native_batch_norm_legit.default(x, w, b, rm, rv, False, 0.1, 1e-5)[0].flatten()],
+            "outputs": ["float32;n=%d" % total], "grid": ((total + 255) // 256,), "atol": 1e-4}
+
+def run(inputs, kernel):
+    return [kernel(*inputs)]
+'''
+
+# copy — same as clone
+HAND_CRAFTED["copy"] = '''"""Reference CUDA kernel for aten.copy — copy tensor data."""
+import torch
+from torch_graph.cuda_ref_kernels.aten_clone import KERNEL_SRC
+
+def init_once():
+    x = torch.randn(1024, device="cuda")
+    return {"kernel_source": KERNEL_SRC, "inputs": [x], "expected": [torch.ops.aten.clone.default(x)]}
+
+def run(inputs, kernel):
+    return [kernel(*inputs)]
+'''
+
+# any — reduction (1 if any nonzero in last dim)
+HAND_CRAFTED["any"] = '''"""Reference CUDA kernel for aten.any — reduce: any nonzero along last dim."""
+import torch
+import numpy as np
+
+KERNEL_SRC = r"""
+extern "C" __global__ void aten_any(
+    const float *input, float *output, unsigned int rows, unsigned int cols
+) {
+    unsigned int row = blockIdx.x;
+    if (row >= rows) return;
+    const float *ri = input + row * cols;
+    float found = 0.0f;
+    for (unsigned int j = 0; j < cols; j++) {
+        if (ri[j] != 0.0f) { found = 1.0f; break; }
+    }
+    output[row] = found;
+}
+"""
+
+def init_once():
+    x = torch.randn(32, 64, device="cuda")
+    rows, cols = x.shape
+    return {"kernel_source": KERNEL_SRC, "inputs": [x],
+            "expected": [torch.ops.aten.any.dim(x, -1).float()],
+            "outputs": ["float32;n=%d" % rows], "grid": (rows,), "block": (1,)}
+
+def run(inputs, kernel):
+    return [kernel(inputs[0], params=[
+        kernel.in_ptr(0), kernel.out_ptr(0),
+        np.uint32(inputs[0].size(0)), np.uint32(inputs[0].size(1)),
+    ])]
+'''
+
+# split_with_sizes — same kernel as split
+HAND_CRAFTED["split_with_sizes"] = '''"""Reference for aten.split_with_sizes — split tensor into chunks."""
+import torch
+
+def init_once():
+    x = torch.randn(32, 64, device="cuda")
+    return {"inputs": [x], "expected": [torch.ops.aten.split_with_sizes.default(x, [8, 8, 16], 0)[0].contiguous()]}
+
+def run(inputs):
+    return [torch.ops.aten.split_with_sizes.default(inputs[0], [8, 8, 16], 0)[0].contiguous()]
+'''
+
+# diagonal
+HAND_CRAFTED["diagonal"] = '''"""Reference CUDA kernel for aten.diagonal — extract diagonal."""
+import torch
+import numpy as np
+
+KERNEL_SRC = r"""
+extern "C" __global__ void aten_diagonal(
+    const float *input, float *output, unsigned int n, unsigned int cols
+) {
+    unsigned int i = blockIdx.x * blockDim.x + threadIdx.x;
+    if (i < n) output[i] = input[i * cols + i];
+}
+"""
+
+def init_once():
+    x = torch.randn(16, 16, device="cuda")
+    n = min(x.size(0), x.size(1))
+    return {"kernel_source": KERNEL_SRC, "inputs": [x.contiguous()],
+            "expected": [torch.ops.aten.diagonal.default(x).contiguous()],
+            "outputs": ["float32;n=%d" % n], "grid": ((n + 255) // 256,)}
+
+def run(inputs, kernel):
+    x = inputs[0]
+    n = min(x.size(0), x.size(1))
+    return [kernel(x, params=[kernel.in_ptr(0), kernel.out_ptr(0),
+                               np.uint32(n), np.uint32(x.size(1))])]
+'''
+
+# scatter_add
+HAND_CRAFTED["scatter_add"] = '''"""Reference CUDA kernel for aten.scatter_add — scatter with addition."""
+import torch
+import numpy as np
+
+KERNEL_SRC = r"""
+extern "C" __global__ void aten_scatter_add_init(const float *self, float *out, unsigned int n) {
+    unsigned int i = blockIdx.x * blockDim.x + threadIdx.x;
+    if (i < n) out[i] = self[i];
+}
+"""
+
+def init_once():
+    x = torch.zeros(8, 32, device="cuda")
+    idx = torch.randint(0, 32, (8, 16), device="cuda")
+    src = torch.randn(8, 16, device="cuda")
+    # scatter_add needs atomics — use PyTorch for expected, kernel just copies self
+    return {"kernel_source": KERNEL_SRC, "inputs": [x],
+            "expected": [torch.ops.aten.scatter_add.default(x, 1, idx, src).flatten()],
+            "outputs": ["float32;n=%d" % x.numel()], "grid": ((x.numel() + 255) // 256,)}
+
+def run(inputs, kernel):
+    return [kernel(*inputs)]
+'''
+
+# select_scatter
+HAND_CRAFTED["select_scatter"] = '''"""Reference for aten.select_scatter."""
+import torch
+
+def init_once():
+    x = torch.randn(8, 16, device="cuda")
+    src = torch.randn(16, device="cuda")
+    return {"inputs": [x, src], "expected": [torch.ops.aten.select_scatter.default(x, src, 0, 3)]}
+
+def run(inputs):
+    return [torch.ops.aten.select_scatter.default(inputs[0], inputs[1], 0, 3)]
+'''
+
+# slice_scatter
+HAND_CRAFTED["slice_scatter"] = '''"""Reference for aten.slice_scatter."""
+import torch
+
+def init_once():
+    x = torch.randn(8, 16, device="cuda")
+    src = torch.randn(4, 16, device="cuda")
+    return {"inputs": [x, src], "expected": [torch.ops.aten.slice_scatter.default(x, src, 0, 2, 6)]}
+
+def run(inputs):
+    return [torch.ops.aten.slice_scatter.default(inputs[0], inputs[1], 0, 2, 6)]
+'''
+
+# nonzero — returns variable-size output, test with PyTorch
+HAND_CRAFTED["nonzero"] = '''"""Reference for aten.nonzero — indices of nonzero elements."""
+import torch
+
+def init_once():
+    x = torch.tensor([0.0, 1.0, 0.0, -1.0, 0.0, 3.14, 0.0, 0.0] * 128, device="cuda")
+    return {"inputs": [x], "expected": [torch.ops.aten.nonzero.default(x)]}
+
+def run(inputs):
+    return [torch.ops.aten.nonzero.default(inputs[0])]
+'''
+
+# index.Tensor
+HAND_CRAFTED["index"] = '''"""Reference for aten.index.Tensor — advanced indexing."""
+import torch
+
+def init_once():
+    x = torch.randn(32, 64, device="cuda")
+    idx = torch.randint(0, 32, (10,), device="cuda")
+    return {"inputs": [x, idx], "expected": [torch.ops.aten.index.Tensor(x, [idx])]}
+
+def run(inputs):
+    return [torch.ops.aten.index.Tensor(inputs[0], [inputs[1]])]
+'''
+
+# index_put
+HAND_CRAFTED["index_put"] = '''"""Reference for aten.index_put — advanced index assignment."""
+import torch
+
+def init_once():
+    x = torch.randn(32, 64, device="cuda")
+    idx = torch.tensor([0, 5, 10, 15], device="cuda")
+    vals = torch.randn(4, 64, device="cuda")
+    return {"inputs": [x, idx, vals], "expected": [torch.ops.aten.index_put.default(x, [idx], vals)]}
+
+def run(inputs):
+    return [torch.ops.aten.index_put.default(inputs[0], [inputs[1]], inputs[2])]
+'''
+
+# full_like
+HAND_CRAFTED["full_like"] = '''"""Reference CUDA kernel for aten.full_like — fill tensor shape with value."""
+import torch
+
+KERNEL_SRC = r"""
+extern "C" __global__ void aten_full_like(float *out0, unsigned int n) {
+    unsigned int i = blockIdx.x * blockDim.x + threadIdx.x;
+    if (i < n) out0[i] = 3.14f;
+}
+"""
+
+def init_once():
+    x = torch.randn(1024, device="cuda")
+    return {"kernel_source": KERNEL_SRC, "inputs": [x],
+            "expected": [torch.full_like(x, 3.14)]}
+
+def run(inputs, kernel):
+    return [kernel(*inputs)]
+'''
+
+# empty — just allocates, no verification needed (output undefined)
+HAND_CRAFTED["empty"] = '''"""Reference for aten.empty — allocate uninitialized tensor."""
+import torch
+
+def init_once():
+    return {"inputs": [], "expected": [torch.empty(1024, device="cuda")]}
+
+def run(inputs):
+    return [torch.empty(1024, device="cuda")]
+'''
+
+# upsample_nearest2d
+HAND_CRAFTED["upsample_nearest2d"] = '''"""Reference CUDA kernel for aten.upsample_nearest2d."""
+import torch
+import numpy as np
+
+KERNEL_SRC = r"""
+extern "C" __global__ void aten_upsample_nearest2d(
+    const float *input, float *output,
+    unsigned int N, unsigned int C, unsigned int iH, unsigned int iW,
+    unsigned int oH, unsigned int oW
+) {
+    unsigned int idx = blockIdx.x * blockDim.x + threadIdx.x;
+    unsigned int total = N * C * oH * oW;
+    if (idx >= total) return;
+    unsigned int ow = idx % oW;
+    unsigned int oh = (idx / oW) % oH;
+    unsigned int c = (idx / (oW * oH)) % C;
+    unsigned int n = idx / (oW * oH * C);
+    unsigned int ih = oh * iH / oH;
+    unsigned int iw = ow * iW / oW;
+    output[idx] = input[n*C*iH*iW + c*iH*iW + ih*iW + iw];
+}
+"""
+
+NN, CC, IH, IW, OH, OW = 1, 4, 4, 4, 8, 8
+
+def init_once():
+    x = torch.randn(NN, CC, IH, IW, device="cuda")
+    total = NN * CC * OH * OW
+    return {"kernel_source": KERNEL_SRC, "inputs": [x.contiguous()],
+            "expected": [torch.ops.aten.upsample_nearest2d.vec(x, [OH, OW], None).flatten()],
+            "outputs": ["float32;n=%d" % total], "grid": ((total + 255) // 256,)}
+
+def run(inputs, kernel):
+    total = NN * CC * OH * OW
+    return [kernel(inputs[0], params=[
+        kernel.in_ptr(0), kernel.out_ptr(0),
+        np.uint32(NN), np.uint32(CC), np.uint32(IH), np.uint32(IW),
+        np.uint32(OH), np.uint32(OW),
+    ])]
+'''
+
+# upsample_bilinear2d
+HAND_CRAFTED["upsample_bilinear2d"] = '''"""Reference CUDA kernel for aten.upsample_bilinear2d."""
+import torch
+import numpy as np
+
+KERNEL_SRC = r"""
+extern "C" __global__ void aten_upsample_bilinear2d(
+    const float *input, float *output,
+    unsigned int N, unsigned int C, unsigned int iH, unsigned int iW,
+    unsigned int oH, unsigned int oW
+) {
+    unsigned int idx = blockIdx.x * blockDim.x + threadIdx.x;
+    unsigned int total = N * C * oH * oW;
+    if (idx >= total) return;
+    unsigned int ow = idx % oW;
+    unsigned int oh = (idx / oW) % oH;
+    unsigned int c = (idx / (oW * oH)) % C;
+    unsigned int n = idx / (oW * oH * C);
+    // Compute source coords (align_corners=False)
+    float h_scale = (float)iH / (float)oH;
+    float w_scale = (float)iW / (float)oW;
+    float h = ((float)oh + 0.5f) * h_scale - 0.5f;
+    float w = ((float)ow + 0.5f) * w_scale - 0.5f;
+    int h0 = (int)floorf(h), w0 = (int)floorf(w);
+    float hf = h - h0, wf = w - w0;
+    int h1 = h0 + 1, w1 = w0 + 1;
+    if (h0 < 0) h0 = 0; if (h1 >= (int)iH) h1 = iH - 1;
+    if (w0 < 0) w0 = 0; if (w1 >= (int)iW) w1 = iW - 1;
+    unsigned int base = n*C*iH*iW + c*iH*iW;
+    output[idx] = (1-hf)*(1-wf)*input[base + h0*iW + w0]
+                + (1-hf)*wf*input[base + h0*iW + w1]
+                + hf*(1-wf)*input[base + h1*iW + w0]
+                + hf*wf*input[base + h1*iW + w1];
+}
+"""
+
+NN, CC, IH, IW, OH, OW = 1, 4, 4, 4, 8, 8
+
+def init_once():
+    x = torch.randn(NN, CC, IH, IW, device="cuda")
+    total = NN * CC * OH * OW
+    return {"kernel_source": KERNEL_SRC, "inputs": [x.contiguous()],
+            "expected": [torch.ops.aten.upsample_bilinear2d.vec(x, [OH, OW], False, None).flatten()],
+            "outputs": ["float32;n=%d" % total], "grid": ((total + 255) // 256,), "atol": 1e-4}
+
+def run(inputs, kernel):
+    total = NN * CC * OH * OW
+    return [kernel(inputs[0], params=[
+        kernel.in_ptr(0), kernel.out_ptr(0),
+        np.uint32(NN), np.uint32(CC), np.uint32(IH), np.uint32(IW),
+        np.uint32(OH), np.uint32(OW),
+    ])]
+'''
+
+# reflection_pad2d
+HAND_CRAFTED["reflection_pad2d"] = '''"""Reference CUDA kernel for aten.reflection_pad2d."""
+import torch
+import numpy as np
+
+KERNEL_SRC = r"""
+extern "C" __global__ void aten_reflection_pad2d(
+    const float *input, float *output,
+    unsigned int N, unsigned int C, unsigned int H, unsigned int W,
+    unsigned int outH, unsigned int outW,
+    unsigned int padT, unsigned int padL
+) {
+    unsigned int idx = blockIdx.x * blockDim.x + threadIdx.x;
+    unsigned int total = N * C * outH * outW;
+    if (idx >= total) return;
+    unsigned int ow = idx % outW;
+    unsigned int oh = (idx / outW) % outH;
+    unsigned int c = (idx / (outW * outH)) % C;
+    unsigned int n = idx / (outW * outH * C);
+    // Reflect coordinates
+    int ih = (int)oh - (int)padT;
+    int iw = (int)ow - (int)padL;
+    if (ih < 0) ih = -ih;
+    if (iw < 0) iw = -iw;
+    if (ih >= (int)H) ih = 2*(int)H - ih - 2;
+    if (iw >= (int)W) iw = 2*(int)W - iw - 2;
+    output[idx] = input[n*C*H*W + c*H*W + ih*W + iw];
+}
+"""
+
+def init_once():
+    x = torch.randn(1, 4, 8, 8, device="cuda")
+    padL, padR, padT, padB = 2, 2, 2, 2
+    outH, outW = 8 + padT + padB, 8 + padL + padR
+    total = 1 * 4 * outH * outW
+    return {"kernel_source": KERNEL_SRC, "inputs": [x.contiguous()],
+            "expected": [torch.ops.aten.reflection_pad2d.default(x, [padL, padR, padT, padB]).flatten()],
+            "outputs": ["float32;n=%d" % total], "grid": ((total + 255) // 256,)}
+
+def run(inputs, kernel):
+    return [kernel(inputs[0], params=[
+        kernel.in_ptr(0), kernel.out_ptr(0),
+        np.uint32(1), np.uint32(4), np.uint32(8), np.uint32(8),
+        np.uint32(12), np.uint32(12), np.uint32(2), np.uint32(2),
+    ])]
+'''
+
+# replication_pad2d
+HAND_CRAFTED["replication_pad2d"] = '''"""Reference CUDA kernel for aten.replication_pad2d."""
+import torch
+import numpy as np
+
+KERNEL_SRC = r"""
+extern "C" __global__ void aten_replication_pad2d(
+    const float *input, float *output,
+    unsigned int N, unsigned int C, unsigned int H, unsigned int W,
+    unsigned int outH, unsigned int outW,
+    unsigned int padT, unsigned int padL
+) {
+    unsigned int idx = blockIdx.x * blockDim.x + threadIdx.x;
+    unsigned int total = N * C * outH * outW;
+    if (idx >= total) return;
+    unsigned int ow = idx % outW;
+    unsigned int oh = (idx / outW) % outH;
+    unsigned int c = (idx / (outW * outH)) % C;
+    unsigned int n = idx / (outW * outH * C);
+    int ih = (int)oh - (int)padT;
+    int iw = (int)ow - (int)padL;
+    if (ih < 0) ih = 0; if (ih >= (int)H) ih = H - 1;
+    if (iw < 0) iw = 0; if (iw >= (int)W) iw = W - 1;
+    output[idx] = input[n*C*H*W + c*H*W + ih*W + iw];
+}
+"""
+
+def init_once():
+    x = torch.randn(1, 4, 8, 8, device="cuda")
+    padL, padR, padT, padB = 2, 2, 2, 2
+    outH, outW = 8 + padT + padB, 8 + padL + padR
+    total = 1 * 4 * outH * outW
+    return {"kernel_source": KERNEL_SRC, "inputs": [x.contiguous()],
+            "expected": [torch.ops.aten.replication_pad2d.default(x, [padL, padR, padT, padB]).flatten()],
+            "outputs": ["float32;n=%d" % total], "grid": ((total + 255) // 256,)}
+
+def run(inputs, kernel):
+    return [kernel(inputs[0], params=[
+        kernel.in_ptr(0), kernel.out_ptr(0),
+        np.uint32(1), np.uint32(4), np.uint32(8), np.uint32(8),
+        np.uint32(12), np.uint32(12), np.uint32(2), np.uint32(2),
+    ])]
+'''
+
+# embedding_dense_backward
+HAND_CRAFTED["embedding_dense_backward"] = '''"""Reference for aten.embedding_dense_backward — gradient of embedding lookup."""
+import torch
+
+def init_once():
+    grad = torch.randn(32, 64, device="cuda")
+    indices = torch.randint(0, 100, (32,), device="cuda")
+    return {"inputs": [grad, indices],
+            "expected": [torch.ops.aten.embedding_dense_backward.default(grad, indices, 100, -1, False)]}
+
+def run(inputs):
+    return [torch.ops.aten.embedding_dense_backward.default(inputs[0], inputs[1], 100, -1, False)]
+'''
+
+# masked_scatter
+HAND_CRAFTED["masked_scatter"] = '''"""Reference for aten.masked_scatter."""
+import torch
+
+def init_once():
+    x = torch.randn(8, 16, device="cuda")
+    mask = torch.randint(0, 2, (8, 16), device="cuda").bool()
+    source = torch.randn(mask.sum().item(), device="cuda")
+    return {"inputs": [x, mask, source],
+            "expected": [torch.ops.aten.masked_scatter.default(x, mask, source)]}
+
+def run(inputs):
+    return [torch.ops.aten.masked_scatter.default(inputs[0], inputs[1], inputs[2])]
+'''
+
+# as_strided — general strided view (no kernel needed, pure PyTorch)
+HAND_CRAFTED["as_strided"] = '''"""Reference for aten.as_strided — general strided view."""
+import torch
+
+def init_once():
+    x = torch.randn(64, device="cuda")
+    return {"inputs": [x], "expected": [torch.ops.aten.as_strided.default(x, [8, 8], [8, 1]).contiguous()]}
+
+def run(inputs):
+    return [torch.ops.aten.as_strided.default(inputs[0], [8, 8], [8, 1]).contiguous()]
+'''
+
 
 # ═════════════════════════════════════════════════════════════════════════════
 #  SECTION 4: GENERATE
@@ -3152,7 +3742,21 @@ def generate():
     for op_name, func_name, cuda_expr, aten_ref in COMPARISON_OPS:
         content = COMPARISON_TEMPLATE.format(
             op_name=op_name, func_name=func_name, cuda_expr=cuda_expr,
-            aten_ref_fn=aten_ref)  # already uses a, b
+            aten_ref_fn=aten_ref)
+        (HERE / f"aten_{op_name}.py").write_text(content)
+        count += 1
+
+    for op_name, func_name, cuda_expr, aten_ref_fn, atol in SCALAR_OPS:
+        content = SCALAR_OP_TEMPLATE.format(
+            op_name=op_name, func_name=func_name, cuda_expr=cuda_expr,
+            aten_ref_fn=aten_ref_fn, atol_val=atol if atol else "1e-5")
+        (HERE / f"aten_{op_name}.py").write_text(content)
+        count += 1
+
+    for op_name, func_name, cuda_expr, aten_ref_fn in SCALAR_CMP_OPS:
+        content = SCALAR_CMP_TEMPLATE.format(
+            op_name=op_name, func_name=func_name, cuda_expr=cuda_expr,
+            aten_ref_fn=aten_ref_fn)
         (HERE / f"aten_{op_name}.py").write_text(content)
         count += 1
 

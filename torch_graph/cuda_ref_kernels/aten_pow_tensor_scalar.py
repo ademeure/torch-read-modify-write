@@ -1,0 +1,29 @@
+"""Reference CUDA kernel for aten.pow_tensor_scalar (scalar variant)."""
+import torch
+
+KERNEL_SRC = r"""
+extern "C" __global__ void aten_pow_ts(const float *in0, float *out0, unsigned int n) {
+    unsigned int i = blockIdx.x * blockDim.x + threadIdx.x;
+    if (i < n) { float x = in0[i]; out0[i] = powf(x, 2.0f); }
+}
+"""
+
+ATOL = 0.0001
+
+def make_inputs(n=1024, seed=1):
+    if seed == 0:
+        special = torch.tensor([0.0, -0.0, 1.0, -1.0, 0.5, 2.0, 4.0, 100.0, -100.0, 1e-7, 1e7, 1e-45, -1e-45, 1.18e-38, -1.18e-38, float("nan"), float("inf"), float("-inf")], device="cuda")
+        return [special.repeat((n + len(special) - 1) // len(special))[:n]]
+    g = torch.Generator(device="cuda").manual_seed(seed)
+    return [torch.randn(n, device="cuda", generator=g)]
+
+def expected(inputs):
+    x = inputs[0]
+    return [torch.ops.aten.pow.Tensor_Scalar(inputs[0], 2.0)]
+
+def init_once():
+    inputs = make_inputs()
+    return {"kernel_source": KERNEL_SRC, "inputs": inputs, "expected": expected(inputs), "atol": ATOL}
+
+def run(inputs, kernel):
+    return [kernel(*inputs)]

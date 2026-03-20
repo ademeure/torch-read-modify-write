@@ -140,6 +140,33 @@ def triton_softcap_bwd(grad_fp32, tanh_fp32):
     return out
 # ── End Triton softcap backward kernel ───────────────────────────────
 
+# ── Triton lambda scaling kernel ─────────────────────────────────────
+import triton
+import triton.language as tl
+
+@triton.jit
+def _lambda_scale_kernel(
+    x_ptr, x0_ptr, out_ptr, a_scalar, b_scalar, n,
+    BLOCK: tl.constexpr,
+):
+    pid = tl.program_id(0)
+    offs = pid * BLOCK + tl.arange(0, BLOCK)
+    mask = offs < n
+    x = tl.load(x_ptr + offs, mask=mask).to(tl.float32)
+    x0 = tl.load(x0_ptr + offs, mask=mask).to(tl.float32)
+    out = a_scalar * x + b_scalar * x0
+    tl.store(out_ptr + offs, out.to(tl.bfloat16), mask=mask)
+
+def triton_lambda_scale(x, x0, a_scalar, b_scalar):
+    """Fused: a*x + b*x0 in one kernel."""
+    n = x.numel()
+    out = torch.empty_like(x)
+    a_val = a_scalar.item() if hasattr(a_scalar, 'item') else float(a_scalar)
+    b_val = b_scalar.item() if hasattr(b_scalar, 'item') else float(b_scalar)
+    _lambda_scale_kernel[((n + 1023) // 1024,)](x, x0, out, a_val, b_val, n, BLOCK=1024)
+    return out
+# ── End Triton lambda scaling kernel ─────────────────────────────────
+
 # ======================================================================
 # WEIGHTS / PARAMETERS
 # ======================================================================
@@ -395,11 +422,9 @@ def forward(
 
     # /.autoresearch_repo/train.py:272
     # x = self.resid_lambdas[i] * x + self.x0_lambdas[i] * x0
-    getitem_2_select: 'float32[]' = aten.select.int(resid_lambdas, 0, 0)  # strides=(), contiguous=True, view=True
-    mul_mul: 'bfloat16[32, 2048, 512]' = aten.mul.Tensor(getitem_2_select, rms_norm_getitem)  # strides=(1048576, 512, 1), contiguous=True, view=False
-    getitem_3_select: 'float32[]' = aten.select.int(x0_lambdas, 0, 0)  # strides=(), contiguous=True, view=True
-    mul_1_mul: 'bfloat16[32, 2048, 512]' = aten.mul.Tensor(getitem_3_select, rms_norm_getitem)  # strides=(1048576, 512, 1), contiguous=True, view=False
-    add_add: 'bfloat16[32, 2048, 512]' = aten.add.Tensor(mul_mul, mul_1_mul)  # strides=(1048576, 512, 1), contiguous=True, view=False
+    getitem_2_select: 'float32[]' = aten.select.int(resid_lambdas, 0, 0)
+    getitem_3_select: 'float32[]' = aten.select.int(x0_lambdas, 0, 0)
+    add_add = triton_lambda_scale(rms_norm_getitem, rms_norm_getitem, getitem_2_select, getitem_3_select)  # FUSED: lambda scaling via Triton
 
     # ════════════════════════════════════════════════════════════════
     # self.transformer.h.0
@@ -559,11 +584,9 @@ def forward(
 
     # /.autoresearch_repo/train.py:272
     # x = self.resid_lambdas[i] * x + self.x0_lambdas[i] * x0
-    getitem_8_select: 'float32[]' = aten.select.int(resid_lambdas, 0, 1)  # strides=(), contiguous=True, view=True
-    mul_10_mul: 'bfloat16[32, 2048, 512]' = aten.mul.Tensor(getitem_8_select, h0_add_1)  # strides=(1048576, 512, 1), contiguous=True, view=False
-    getitem_9_select: 'float32[]' = aten.select.int(x0_lambdas, 0, 1)  # strides=(), contiguous=True, view=True
-    mul_11_mul: 'bfloat16[32, 2048, 512]' = aten.mul.Tensor(getitem_9_select, rms_norm_getitem)  # strides=(1048576, 512, 1), contiguous=True, view=False
-    add_8_add: 'bfloat16[32, 2048, 512]' = aten.add.Tensor(mul_10_mul, mul_11_mul)  # strides=(1048576, 512, 1), contiguous=True, view=False
+    getitem_8_select: 'float32[]' = aten.select.int(resid_lambdas, 0, 1)
+    getitem_9_select: 'float32[]' = aten.select.int(x0_lambdas, 0, 1)
+    add_8_add = triton_lambda_scale(h0_add_1, rms_norm_getitem, getitem_8_select, getitem_9_select)  # FUSED: lambda scaling via Triton
 
     # ════════════════════════════════════════════════════════════════
     # self.value_embeds.1 (Embedding)
@@ -740,11 +763,9 @@ def forward(
 
     # /.autoresearch_repo/train.py:272
     # x = self.resid_lambdas[i] * x + self.x0_lambdas[i] * x0
-    getitem_15_select: 'float32[]' = aten.select.int(resid_lambdas, 0, 2)  # strides=(), contiguous=True, view=True
-    mul_22_mul: 'bfloat16[32, 2048, 512]' = aten.mul.Tensor(getitem_15_select, h1_add_1)  # strides=(1048576, 512, 1), contiguous=True, view=False
-    getitem_16_select: 'float32[]' = aten.select.int(x0_lambdas, 0, 2)  # strides=(), contiguous=True, view=True
-    mul_23_mul: 'bfloat16[32, 2048, 512]' = aten.mul.Tensor(getitem_16_select, rms_norm_getitem)  # strides=(1048576, 512, 1), contiguous=True, view=False
-    add_17_add: 'bfloat16[32, 2048, 512]' = aten.add.Tensor(mul_22_mul, mul_23_mul)  # strides=(1048576, 512, 1), contiguous=True, view=False
+    getitem_15_select: 'float32[]' = aten.select.int(resid_lambdas, 0, 2)
+    getitem_16_select: 'float32[]' = aten.select.int(x0_lambdas, 0, 2)
+    add_17_add = triton_lambda_scale(h1_add_1, rms_norm_getitem, getitem_15_select, getitem_16_select)  # FUSED: lambda scaling via Triton
 
     # ════════════════════════════════════════════════════════════════
     # self.transformer.h.2
@@ -892,11 +913,9 @@ def forward(
 
     # /.autoresearch_repo/train.py:272
     # x = self.resid_lambdas[i] * x + self.x0_lambdas[i] * x0
-    getitem_21_select: 'float32[]' = aten.select.int(resid_lambdas, 0, 3)  # strides=(), contiguous=True, view=True
-    mul_32_mul: 'bfloat16[32, 2048, 512]' = aten.mul.Tensor(getitem_21_select, h2_add_1)  # strides=(1048576, 512, 1), contiguous=True, view=False
-    getitem_22_select: 'float32[]' = aten.select.int(x0_lambdas, 0, 3)  # strides=(), contiguous=True, view=True
-    mul_33_mul: 'bfloat16[32, 2048, 512]' = aten.mul.Tensor(getitem_22_select, rms_norm_getitem)  # strides=(1048576, 512, 1), contiguous=True, view=False
-    add_25_add: 'bfloat16[32, 2048, 512]' = aten.add.Tensor(mul_32_mul, mul_33_mul)  # strides=(1048576, 512, 1), contiguous=True, view=False
+    getitem_21_select: 'float32[]' = aten.select.int(resid_lambdas, 0, 3)
+    getitem_22_select: 'float32[]' = aten.select.int(x0_lambdas, 0, 3)
+    add_25_add = triton_lambda_scale(h2_add_1, rms_norm_getitem, getitem_21_select, getitem_22_select)  # FUSED: lambda scaling via Triton
 
     # ════════════════════════════════════════════════════════════════
     # self.value_embeds.3 (Embedding)
@@ -1072,11 +1091,9 @@ def forward(
 
     # /.autoresearch_repo/train.py:272
     # x = self.resid_lambdas[i] * x + self.x0_lambdas[i] * x0
-    getitem_28_select: 'float32[]' = aten.select.int(resid_lambdas, 0, 4)  # strides=(), contiguous=True, view=True
-    mul_44_mul: 'bfloat16[32, 2048, 512]' = aten.mul.Tensor(getitem_28_select, h3_add_1)  # strides=(1048576, 512, 1), contiguous=True, view=False
-    getitem_29_select: 'float32[]' = aten.select.int(x0_lambdas, 0, 4)  # strides=(), contiguous=True, view=True
-    mul_45_mul: 'bfloat16[32, 2048, 512]' = aten.mul.Tensor(getitem_29_select, rms_norm_getitem)  # strides=(1048576, 512, 1), contiguous=True, view=False
-    add_33_add: 'bfloat16[32, 2048, 512]' = aten.add.Tensor(mul_44_mul, mul_45_mul)  # strides=(1048576, 512, 1), contiguous=True, view=False
+    getitem_28_select: 'float32[]' = aten.select.int(resid_lambdas, 0, 4)
+    getitem_29_select: 'float32[]' = aten.select.int(x0_lambdas, 0, 4)
+    add_33_add = triton_lambda_scale(h3_add_1, rms_norm_getitem, getitem_28_select, getitem_29_select)  # FUSED: lambda scaling via Triton
 
     # ════════════════════════════════════════════════════════════════
     # self.transformer.h.4
@@ -1224,11 +1241,9 @@ def forward(
 
     # /.autoresearch_repo/train.py:272
     # x = self.resid_lambdas[i] * x + self.x0_lambdas[i] * x0
-    getitem_34_select: 'float32[]' = aten.select.int(resid_lambdas, 0, 5)  # strides=(), contiguous=True, view=True
-    mul_54_mul: 'bfloat16[32, 2048, 512]' = aten.mul.Tensor(getitem_34_select, h4_add_1)  # strides=(1048576, 512, 1), contiguous=True, view=False
-    getitem_35_select: 'float32[]' = aten.select.int(x0_lambdas, 0, 5)  # strides=(), contiguous=True, view=True
-    mul_55_mul: 'bfloat16[32, 2048, 512]' = aten.mul.Tensor(getitem_35_select, rms_norm_getitem)  # strides=(1048576, 512, 1), contiguous=True, view=False
-    add_41_add: 'bfloat16[32, 2048, 512]' = aten.add.Tensor(mul_54_mul, mul_55_mul)  # strides=(1048576, 512, 1), contiguous=True, view=False
+    getitem_34_select: 'float32[]' = aten.select.int(resid_lambdas, 0, 5)
+    getitem_35_select: 'float32[]' = aten.select.int(x0_lambdas, 0, 5)
+    add_41_add = triton_lambda_scale(h4_add_1, rms_norm_getitem, getitem_34_select, getitem_35_select)  # FUSED: lambda scaling via Triton
 
     # ════════════════════════════════════════════════════════════════
     # self.value_embeds.5 (Embedding)
@@ -1405,11 +1420,9 @@ def forward(
 
     # /.autoresearch_repo/train.py:272
     # x = self.resid_lambdas[i] * x + self.x0_lambdas[i] * x0
-    getitem_41_select: 'float32[]' = aten.select.int(resid_lambdas, 0, 6)  # strides=(), contiguous=True, view=True
-    mul_66_mul: 'bfloat16[32, 2048, 512]' = aten.mul.Tensor(getitem_41_select, h5_add_1)  # strides=(1048576, 512, 1), contiguous=True, view=False
-    getitem_42_select: 'float32[]' = aten.select.int(x0_lambdas, 0, 6)  # strides=(), contiguous=True, view=True
-    mul_67_mul: 'bfloat16[32, 2048, 512]' = aten.mul.Tensor(getitem_42_select, rms_norm_getitem)  # strides=(1048576, 512, 1), contiguous=True, view=False
-    add_50_add: 'bfloat16[32, 2048, 512]' = aten.add.Tensor(mul_66_mul, mul_67_mul)  # strides=(1048576, 512, 1), contiguous=True, view=False
+    getitem_41_select: 'float32[]' = aten.select.int(resid_lambdas, 0, 6)
+    getitem_42_select: 'float32[]' = aten.select.int(x0_lambdas, 0, 6)
+    add_50_add = triton_lambda_scale(h5_add_1, rms_norm_getitem, getitem_41_select, getitem_42_select)  # FUSED: lambda scaling via Triton
 
     # ════════════════════════════════════════════════════════════════
     # self.transformer.h.6
@@ -1557,11 +1570,9 @@ def forward(
 
     # /.autoresearch_repo/train.py:272
     # x = self.resid_lambdas[i] * x + self.x0_lambdas[i] * x0
-    getitem_47_select: 'float32[]' = aten.select.int(resid_lambdas, 0, 7)  # strides=(), contiguous=True, view=True
-    mul_76_mul: 'bfloat16[32, 2048, 512]' = aten.mul.Tensor(getitem_47_select, h6_add_1)  # strides=(1048576, 512, 1), contiguous=True, view=False
-    getitem_48_select: 'float32[]' = aten.select.int(x0_lambdas, 0, 7)  # strides=(), contiguous=True, view=True
-    mul_77_mul: 'bfloat16[32, 2048, 512]' = aten.mul.Tensor(getitem_48_select, rms_norm_getitem)  # strides=(1048576, 512, 1), contiguous=True, view=False
-    add_58_add: 'bfloat16[32, 2048, 512]' = aten.add.Tensor(mul_76_mul, mul_77_mul)  # strides=(1048576, 512, 1), contiguous=True, view=False
+    getitem_47_select: 'float32[]' = aten.select.int(resid_lambdas, 0, 7)
+    getitem_48_select: 'float32[]' = aten.select.int(x0_lambdas, 0, 7)
+    add_58_add = triton_lambda_scale(h6_add_1, rms_norm_getitem, getitem_47_select, getitem_48_select)  # FUSED: lambda scaling via Triton
 
     # ════════════════════════════════════════════════════════════════
     # self.value_embeds.7 (Embedding)

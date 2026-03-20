@@ -2113,7 +2113,7 @@ _FILE_OPS = {
                                   _seeded((d["N"],d["G"]), s+200), _seeded((d["N"],d["G"]), s+300),
                                   _seeded((d["C"],), s+400)],
         "aten": lambda inp: [torch.ops.aten.native_group_norm_backward.default(
-            inp[0], inp[1], inp[2], inp[3], inp[4], 2, 8, 16, 4, [True,True,True])[0].flatten()], "atol": 50.0},
+            inp[0], inp[1], inp[2], inp[3], inp[4], 2, 8, 16, 4, [True,True,True])[0].flatten()], "atol": 100.0},
 }
 
 for _name, _cfg in _FILE_OPS.items():

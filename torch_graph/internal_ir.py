@@ -447,13 +447,118 @@ def fx_node_to_python(node: Node, graph_module: GraphModule | None = None) -> st
     return f"{node.name}{type_annotation} = {target_str}({all_args})"
 
 
+def _serialize_module_stack(node: Node) -> list[dict[str, str]]:
+    """Serialize the nn_module_stack hierarchy from an FX node.
+
+    Returns a list of ``{"path": ..., "type": ...}`` dicts, one per module
+    level that has a numeric-indexed ancestor (i.e. is inside a repeated
+    module like ``layers.0``).  Empty list if no such hierarchy exists.
+    """
+    from torch_graph._utils import clean_self_path
+
+    nn_mod = node.meta.get("nn_module_stack") or node.meta.get("fwd_nn_module_stack", {})
+    if not nn_mod:
+        return []
+
+    result: list[dict[str, str]] = []
+    found_numeric = False
+    for _, v in nn_mod.items():
+        if not (isinstance(v, tuple) and len(v) >= 2):
+            continue
+        raw_path = v[0]
+        mod_type_obj = v[1]
+        mod_type = mod_type_obj.__name__ if hasattr(mod_type_obj, "__name__") else str(mod_type_obj)
+        clean = clean_self_path(raw_path)
+        parts = clean.split(".")
+
+        if not found_numeric:
+            for p in parts[1:]:  # skip "self"
+                if p.isdigit():
+                    found_numeric = True
+                    break
+            if found_numeric:
+                result.append({"path": clean, "type": mod_type})
+        else:
+            result.append({"path": clean, "type": mod_type})
+    return result
+
+
+def _serialize_source_info(node: Node, source_map: dict | None = None) -> dict[str, Any] | None:
+    """Extract source annotation for an IR node.
+
+    Tries the source_map first (gives file/line/code from the pre-decomposition
+    graph).  Falls back to nn_module_stack for module_path/module_type which is
+    always available on aten nodes.  Returns None only when neither source is
+    available.
+    """
+    from torch_graph._utils import clean_self_path
+
+    # Extract raw metadata from the node
+    nn_mod = node.meta.get("nn_module_stack") or node.meta.get("fwd_nn_module_stack", {})
+    src_fn_stack = node.meta.get("source_fn_stack") or node.meta.get("fwd_source_fn_stack", [])
+
+    # Get the deepest module path and type from nn_module_stack
+    module_path = ""
+    module_type = ""
+    if nn_mod:
+        for _, v in nn_mod.items():
+            if isinstance(v, tuple) and len(v) >= 2:
+                module_path = clean_self_path(v[0])
+                module_type = v[1].__name__ if hasattr(v[1], "__name__") else str(v[1])
+
+    # Get source_fn name (for source_map lookup)
+    source_fn = ""
+    if src_fn_stack:
+        for item in src_fn_stack:
+            if isinstance(item, tuple) and len(item) >= 1:
+                source_fn = item[0]
+
+    # Try source_map lookup for file/line/code
+    file = ""
+    line = 0
+    code = ""
+    if source_map:
+        # Try by source_fn key first
+        if source_fn and source_fn in source_map:
+            trace = source_map[source_fn]
+            file, line, code = trace.file, trace.line, trace.code
+        elif module_path:
+            # Fallback: find a trace whose module_path matches ours
+            for val in source_map.values():
+                if val.module_path and val.module_path in module_path:
+                    file, line, code = val.file, val.line, val.code
+                    break
+
+    # Build result — include module info even when file/line are missing
+    if not module_path and not file:
+        return None
+    result: dict[str, Any] = {}
+    if module_path:
+        result["module_path"] = module_path
+    if module_type:
+        result["module_type"] = module_type
+    if file:
+        result["file"] = file
+    if line:
+        result["line"] = line
+    if code:
+        result["code"] = code
+    return result
+
+
 def graph_to_ir(
     graph_module: GraphModule,
     *,
     fn_name: str = "forward",
     placeholder_display_names: dict[str, str] | None = None,
+    source_map: dict | None = None,
 ) -> dict[str, Any]:
-    """Serialize a graph as the canonical internal IR."""
+    """Serialize a graph as the canonical internal IR.
+
+    When *source_map* is provided, each node gets a ``source`` field with
+    file/line/code annotations (from the pre-decomposition graph) plus
+    module_path/module_type (from nn_module_stack, always available).
+    """
     placeholders = []
     nodes = []
     for node in graph_module.graph.nodes:
@@ -472,18 +577,28 @@ def graph_to_ir(
         if node.op == "output":
             continue
 
-        nodes.append(
-            {
-                "name": node.name,
-                "fx_op": node.op,
-                "target": target_to_str(node.target),
-                "args": [value_to_ir(arg) for arg in node.args],
-                "kwargs": {k: value_to_ir(v) for k, v in node.kwargs.items()},
-                "meta": tensor_meta(node.meta.get("val")) or {},
-                "python": fx_node_to_python(node, graph_module),
-                "stride_comment": _stride_comment(node),
-            }
-        )
+        node_dict = {
+            "name": node.name,
+            "fx_op": node.op,
+            "target": target_to_str(node.target),
+            "args": [value_to_ir(arg) for arg in node.args],
+            "kwargs": {k: value_to_ir(v) for k, v in node.kwargs.items()},
+            "meta": tensor_meta(node.meta.get("val")) or {},
+            "python": fx_node_to_python(node, graph_module),
+            "stride_comment": _stride_comment(node),
+        }
+
+        # Module hierarchy (for uniquification grouping)
+        mod_stack = _serialize_module_stack(node)
+        if mod_stack:
+            node_dict["module_stack"] = mod_stack
+
+        # Source annotation (file/line/code + module_path/type)
+        src_info = _serialize_source_info(node, source_map)
+        if src_info:
+            node_dict["source"] = src_info
+
+        nodes.append(node_dict)
 
     return {
         "fn_name": fn_name,

@@ -159,7 +159,11 @@ def graph_to_ir_json(
         graph_module,
         fn_name=fn_name,
         placeholder_display_names=primal_map,
+        source_map=source_map,
     )
+    # Legacy annotation path — adds source fields from source_map for nodes
+    # that didn't already get them in graph_to_ir.  Kept for backward compat
+    # with callers that rely on the exact field format from _annotate_source_metadata.
     _annotate_source_metadata(result, graph_module, source_map)
     result["schema"] = "torch_graph.ir_json/v1"
     return result

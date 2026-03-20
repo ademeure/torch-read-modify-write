@@ -2627,7 +2627,7 @@ def export_graph_to_python(
     """
     buf = StringIO()
     graph = graph_module.graph
-    ir_graph = _build_graph_ir(graph_module, fn_name=fn_name, placeholder_display_names=primal_map)
+    ir_graph = _build_graph_ir(graph_module, fn_name=fn_name, placeholder_display_names=primal_map, source_map=source_map)
     ir_nodes_by_name = {node["name"]: node for node in ir_graph["nodes"]}
 
     # Build name remapping for named intermediates

@@ -1,8 +1,8 @@
 #!/usr/bin/env python3
 """kbox batch — Run all test files in a directory, single process.
 
-Keeps one worker daemon alive across all tests. Each test loads, runs,
-verifies in ~50ms instead of ~1.5s (no per-test process startup).
+Reuses one KernelSession (one worker daemon, one VMM pool) across all
+tests via reconfigure(). Each test takes ~50ms instead of ~1.5s.
 
 Usage:
     kbox batch <directory>
@@ -13,7 +13,6 @@ import sys
 import os
 import time
 import glob
-import importlib
 import importlib.util
 import inspect
 import traceback
@@ -38,60 +37,18 @@ _ensure_kernelbox_importable()
 
 def _load_test_module(path):
     """Load a test .py file as a module."""
-    name = os.path.basename(path).replace('.py', '').replace('.', '_')
+    name = os.path.basename(path).replace('.py', '')
     spec = importlib.util.spec_from_file_location(name, path)
     mod = importlib.util.module_from_spec(spec)
     spec.loader.exec_module(mod)
     return mod
 
 
-def _run_single_test(test_path, atol_default=1e-5, rtol_default=1e-5):
-    """Load and run a single test file. Returns (passed, message)."""
+def _verify(result, expected, atol, rtol):
+    """Compare result tensors to expected. Returns (ok, message)."""
     import torch
-    from kernelbox.dev import KernelSession
-
-    mod = _load_test_module(test_path)
-
-    init_fn = getattr(mod, "init_once", None) or getattr(mod, "init", None)
-    if init_fn is None:
-        return None, "skip (no init)"
-
-    state = init_fn()
-    if not isinstance(state, dict):
-        return False, "init must return dict"
-
-    inputs = state.get("inputs", [])
-    expected = state.get("expected", [])
-    atol = state.get("atol", atol_default)
-    rtol = state.get("rtol", rtol_default)
-
-    run_fn = getattr(mod, "run", None)
-    if run_fn is None:
-        return False, "no run function"
-
-    sig = inspect.signature(run_fn)
-    needs_kernel = len(sig.parameters) >= 2
-
-    if needs_kernel and "kernel_source" in state:
-        session = KernelSession(
-            kernel_source=state["kernel_source"],
-            outputs=state.get("outputs", 1),
-            grid=state.get("grid"),
-            block=state.get("block"),
-            smem=state.get("smem"),
-        )
-        try:
-            result = run_fn(inputs, session)
-        finally:
-            del session  # free worker daemon + GPU memory
-    elif needs_kernel:
-        return None, "skip (needs kernel, no source)"
-    else:
-        result = run_fn(inputs)
-
     if not isinstance(result, (list, tuple)):
         result = [result]
-
     for i, (r, e) in enumerate(zip(result, expected)):
         if not isinstance(r, torch.Tensor) or not isinstance(e, torch.Tensor):
             continue
@@ -107,7 +64,6 @@ def _run_single_test(test_path, atol_default=1e-5, rtol_default=1e-5):
             diff = (rf - ef).abs().max().item()
             if not torch.allclose(rf, ef, atol=atol, rtol=rtol):
                 return False, f"output[{i}]: max_err={diff:.2e} (atol={atol})"
-
     return True, "ok"
 
 
@@ -141,6 +97,13 @@ def main():
         print(f"No files matching '{args.pattern}' in {directory}")
         sys.exit(1)
 
+    import torch
+    from kernelbox.dev import KernelSession
+
+    # Create one session with a dummy kernel — will reconfigure per test
+    dummy_src = 'extern "C" __global__ void _dummy(float *x, unsigned int n) {}'
+    session = KernelSession(kernel_source=dummy_src)
+
     passed = failed = skipped = 0
     failures = []
     t0 = time.time()
@@ -151,22 +114,66 @@ def main():
             continue
 
         try:
-            ok, msg = _run_single_test(f, args.atol, args.rtol)
-            if ok is None:
+            mod = _load_test_module(f)
+            init_fn = getattr(mod, "init_once", None) or getattr(mod, "init", None)
+            if not init_fn:
                 skipped += 1
-            elif ok:
+                continue
+
+            state = init_fn()
+            if not isinstance(state, dict):
+                failed += 1
+                failures.append((name, "init must return dict"))
+                print(f"FAIL {name}: init must return dict", flush=True)
+                continue
+
+            inputs = state.get("inputs", [])
+            expected = state.get("expected", [])
+            atol = state.get("atol", args.atol)
+            rtol = state.get("rtol", args.rtol)
+            run_fn = getattr(mod, "run", None)
+
+            if run_fn is None:
+                failed += 1
+                failures.append((name, "no run"))
+                print(f"FAIL {name}: no run function", flush=True)
+                continue
+
+            sig = inspect.signature(run_fn)
+            needs_kernel = len(sig.parameters) >= 2
+
+            if needs_kernel and "kernel_source" in state:
+                session.reconfigure(
+                    kernel_source=state["kernel_source"],
+                    outputs=state.get("outputs", 1),
+                    grid=state.get("grid"),
+                    block=state.get("block"),
+                    smem=state.get("smem"),
+                )
+                result = run_fn(inputs, session)
+            elif needs_kernel:
+                skipped += 1
+                continue
+            else:
+                result = run_fn(inputs)
+
+            ok, msg = _verify(result, expected, atol, rtol)
+            if ok:
                 passed += 1
                 print(f"PASS {name}", flush=True)
             else:
                 failed += 1
                 failures.append((name, msg))
                 print(f"FAIL {name}: {msg}", flush=True)
+
         except Exception as ex:
             failed += 1
             failures.append((name, str(ex)[:100]))
             print(f"FAIL {name}: {ex}", flush=True)
 
+    session.close()
     elapsed = time.time() - t0
+
     print(f"\n{'='*60}")
     total = passed + failed + skipped
     print(f"Results: {passed} passed, {failed} failed, {skipped} skipped out of {total} ({elapsed:.1f}s)")

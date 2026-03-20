@@ -2136,10 +2136,49 @@ class KernelSession:
             self._stop_worker(force=force)
         self._start_worker()
 
+    def close(self):
+        """Explicitly release worker daemon and GPU memory.
+
+        Call this instead of relying on __del__ when sessions are created
+        in a loop (e.g. kbox batch), otherwise worker daemons and VMM
+        allocations leak until GC runs.
+        """
+        self._stop_worker()
+        self._free_vmm_chunks()
+
+    def reconfigure(self, kernel_source, outputs=1, grid=None, block=None, smem=None):
+        """Swap kernel source and config without tearing down the worker.
+
+        Reuses the existing worker daemon. The VMM pool is re-SETUPed on
+        the next call if input/output layout changed (the existing
+        _ensure_persistent logic handles this). Only recompiles the kernel.
+
+        Use this in batch mode to avoid per-test process overhead.
+        """
+        self._kernel_source = kernel_source
+        self._raw_outputs = outputs
+        self.default_grid = grid
+        self.default_block = block
+        self.default_smem = smem or 0
+        self._source_hash = None
+        self._cubin = None
+        self._cubin_hash = None
+        self._is_cubin = False
+        self._triton_mode = False
+        self.kernel_path = None
+        self._func_name_override = None
+        self._defines = None
+        self._detected_name = self._detect_name_with_fallback(kernel_source)
+        self._cached_out_tensors = None
+        self._cached_out_specs = None
+        # Invalidate persistent state so next call does fresh SETUP
+        # with correct VMM layout for new inputs/outputs
+        self._persistent_input_ptrs = ()
+        self._recompile_cubin()
+
     def __del__(self):
         try:
-            self._stop_worker()
-            self._free_vmm_chunks()
+            self.close()
         except (OSError, TypeError, AttributeError, ImportError):
             # TypeError/AttributeError: globals may be None during shutdown
             # ImportError: sys.meta_path is None during shutdown

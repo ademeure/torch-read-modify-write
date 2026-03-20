@@ -25,32 +25,7 @@ from pathlib import Path
 
 _root = Path(__file__).resolve().parent
 sys.path.insert(0, str(_root))
-# autoresearch repo on path for train.py imports (sdpa-blackwell-compat branch)
-_ar_root = _root / ".autoresearch_repo"
-sys.path.insert(0, str(_ar_root))
 os.environ.setdefault("HF_HUB_DISABLE_PROGRESS_BARS", "1")
-# Force SDPA on Blackwell (FA3 kernels load but crash at runtime on SM 10.0)
-# Patch flash_attention module before train.py imports it
-import importlib.util
-_fa_spec = importlib.util.spec_from_file_location(
-    "flash_attention", str(_ar_root / "flash_attention.py"))
-_fa_mod = importlib.util.module_from_spec(_fa_spec)
-# Prevent FA3 from loading by temporarily making kernels unimportable
-_real_import = __builtins__.__import__ if hasattr(__builtins__, '__import__') else __import__
-def _block_kernels(name, *args, **kwargs):
-    if name == "kernels":
-        raise ImportError("blocked for SDPA fallback")
-    return _real_import(name, *args, **kwargs)
-import builtins
-_saved = builtins.__import__
-builtins.__import__ = _block_kernels
-try:
-    _fa_spec.loader.exec_module(_fa_mod)
-finally:
-    builtins.__import__ = _saved
-sys.modules["flash_attention"] = _fa_mod
-print(f"Attention backend: {_fa_mod.FLASH_ATTENTION_IMPL}")
-
 os.environ["PYTORCH_ALLOC_CONF"] = "expandable_segments:True"
 os.environ.setdefault(
     "LIBRARY_PATH",
@@ -66,37 +41,17 @@ torch.set_float32_matmul_precision("high")
 # ── Build model from autoresearch code ──────────────────────────────
 
 def _import_autoresearch_classes():
-    """Import GPT, GPTConfig, MuonAdamW from autoresearch without running the training loop.
+    """Import GPT, GPTConfig, MuonAdamW from autoresearch using AST surgery.
 
-    train.py executes training at module level, so we can't do a normal import.
-    Instead, we exec() only the class/function definitions.
+    Uses the recipe wrapper's approach: parse train.py AST, keep only
+    class/function/import definitions, skip the training loop.
     """
-    import importlib
-    # prepare.py is safe to import normally
-    prepare = importlib.import_module("prepare")
-
-    # For train.py, read the source and exec only the parts before the training loop
-    train_path = _ar_root / "train.py"
-    source = train_path.read_text()
-
-    # Find where the training setup begins (after class definitions)
-    # The classes end before "# Hyperparameters" section
-    marker = "# ---------------------------------------------------------------------------\n# Hyperparameters"
-    idx = source.find(marker)
-    if idx < 0:
-        raise RuntimeError("Could not find Hyperparameters section in train.py")
-
-    class_source = source[:idx]
-
-    # Build a proper module object so @dataclass can resolve the module
-    import types as _types
-    train_mod = _types.ModuleType("train")
-    train_mod.__file__ = str(train_path)
-    sys.modules["train"] = train_mod
-    exec(compile(class_source, str(train_path), "exec"), train_mod.__dict__)
-    ns = train_mod.__dict__
-
-    return ns["GPT"], ns["GPTConfig"], ns["MuonAdamW"], prepare.Tokenizer
+    from recipes.autoresearch_wrapper import _load_train_module, _init
+    # Force SDPA to avoid FA3 generating non-Python auto_functionalized ops
+    _init(flash_backend="sdpa")
+    from prepare import Tokenizer
+    ns = _load_train_module(flash_backend="sdpa")
+    return ns["GPT"], ns["GPTConfig"], ns["MuonAdamW"], Tokenizer
 
 
 def _build_autoresearch(depth: int = 4, batch_size: int = 8, seq_len: int = 512):

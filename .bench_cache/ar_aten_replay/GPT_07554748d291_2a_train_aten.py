@@ -196,6 +196,39 @@ def triton_squared_relu_bwd(grad_fp32, relu_fp32, relu_bf16):
     return out
 # ── End Triton squared ReLU backward kernel ──────────────────────────
 
+# ── Triton squared ReLU forward kernel ───────────────────────────────
+import triton
+import triton.language as tl
+
+@triton.jit
+def _sqrelu_fwd_kernel(
+    x_ptr, relu_bf16_ptr, relu_fp32_ptr, sq_bf16_ptr, n,
+    BLOCK: tl.constexpr,
+):
+    pid = tl.program_id(0)
+    offs = pid * BLOCK + tl.arange(0, BLOCK)
+    mask = offs < n
+    x = tl.load(x_ptr + offs, mask=mask)
+    # relu in bf16
+    r_bf16 = tl.where(x > 0, x, 0.0)
+    tl.store(relu_bf16_ptr + offs, r_bf16, mask=mask)
+    # relu in fp32 for backward
+    r_fp32 = r_bf16.to(tl.float32)
+    tl.store(relu_fp32_ptr + offs, r_fp32, mask=mask)
+    # squared in bf16 for c_proj input
+    sq = (r_fp32 * r_fp32).to(tl.bfloat16)
+    tl.store(sq_bf16_ptr + offs, sq, mask=mask)
+
+def triton_squared_relu_fwd(x_bf16):
+    """Fused relu + square: returns (relu_bf16, relu_fp32, squared_bf16)."""
+    n = x_bf16.numel()
+    relu_bf16 = torch.empty_like(x_bf16)
+    relu_fp32 = torch.empty(x_bf16.shape, dtype=torch.float32, device=x_bf16.device)
+    sq_bf16 = torch.empty_like(x_bf16)
+    _sqrelu_fwd_kernel[((n + 1023) // 1024,)](x_bf16, relu_bf16, relu_fp32, sq_bf16, n, BLOCK=1024)
+    return relu_bf16, relu_fp32, sq_bf16
+# ── End Triton squared ReLU forward kernel ───────────────────────────
+
 # ======================================================================
 # WEIGHTS / PARAMETERS
 # ======================================================================
@@ -591,16 +624,15 @@ def forward(
     # self.transformer.h.0.mlp (MLP)
     # /.autoresearch_repo/train.py:102
     # x = F.relu(x).square()
-    h0_mlp_relu: 'bfloat16[32, 2048, 2048]' = aten.relu(h0_mlp_c_fc__unsafe_view)  # strides=(4194304, 2048, 1), contiguous=True, view=False
-    h0_mlp_detach: 'bfloat16[32, 2048, 2048]' = aten.detach(h0_mlp_relu)  # strides=(4194304, 2048, 1), contiguous=True, view=True
-    h0_mlp__to_copy: 'float32[32, 2048, 2048]' = aten._to_copy(h0_mlp_relu, dtype=torch.float32)  # strides=(4194304, 2048, 1), contiguous=True, view=False
-    h0_mlp_pow: 'float32[32, 2048, 2048]' = aten.pow.Tensor_Scalar(h0_mlp__to_copy, 2)  # strides=(4194304, 2048, 1), contiguous=True, view=False
+    h0_mlp_relu, h0_mlp__to_copy, _sqrelu_fwd_sq_0 = triton_squared_relu_fwd(h0_mlp_c_fc__unsafe_view)  # FUSED: squared ReLU forward via Triton
+    h0_mlp_detach = h0_mlp_relu  # alias for backward saved tensor
+    h0_mlp_pow = h0_mlp__to_copy  # alias (backward uses relu_fp32 directly)
 
     # self.transformer.h.0.mlp.c_proj (Linear)
     # /.autoresearch_repo/train.py:103
     # x = self.c_proj(x)
     h0_mlp_c_proj__to_copy: 'bfloat16[512, 2048]' = aten._to_copy(transformer_h_0_mlp_c_proj_weight, dtype=torch.bfloat16)  # strides=(2048, 1), contiguous=True, view=False
-    h0_mlp_c_proj__to_copy_1: 'bfloat16[32, 2048, 2048]' = aten._to_copy(h0_mlp_pow, dtype=torch.bfloat16)  # strides=(4194304, 2048, 1), contiguous=True, view=False
+    h0_mlp_c_proj__to_copy_1 = _sqrelu_fwd_sq_0  # FUSED: already bf16 from triton_squared_relu_fwd
     h0_mlp_c_proj_t: 'bfloat16[2048, 512]' = aten.t(h0_mlp_c_proj__to_copy)  # strides=(1, 2048), contiguous=False, view=True
     h0_mlp_c_proj_view: 'bfloat16[65536, 2048]' = aten.view(h0_mlp_c_proj__to_copy_1, [65536, 2048])  # strides=(2048, 1), contiguous=True, view=True
     h0_mlp_c_proj_mm: 'bfloat16[65536, 512]' = aten.mm(h0_mlp_c_proj_view, h0_mlp_c_proj_t)  # strides=(512, 1), contiguous=True, view=False
@@ -770,16 +802,15 @@ def forward(
     # self.transformer.h.1.mlp (MLP)
     # /.autoresearch_repo/train.py:102
     # x = F.relu(x).square()
-    h1_mlp_relu: 'bfloat16[32, 2048, 2048]' = aten.relu(h1_mlp_c_fc__unsafe_view)  # strides=(4194304, 2048, 1), contiguous=True, view=False
-    h1_mlp_detach: 'bfloat16[32, 2048, 2048]' = aten.detach(h1_mlp_relu)  # strides=(4194304, 2048, 1), contiguous=True, view=True
-    h1_mlp__to_copy: 'float32[32, 2048, 2048]' = aten._to_copy(h1_mlp_relu, dtype=torch.float32)  # strides=(4194304, 2048, 1), contiguous=True, view=False
-    h1_mlp_pow: 'float32[32, 2048, 2048]' = aten.pow.Tensor_Scalar(h1_mlp__to_copy, 2)  # strides=(4194304, 2048, 1), contiguous=True, view=False
+    h1_mlp_relu, h1_mlp__to_copy, _sqrelu_fwd_sq_1 = triton_squared_relu_fwd(h1_mlp_c_fc__unsafe_view)  # FUSED: squared ReLU forward via Triton
+    h1_mlp_detach = h1_mlp_relu  # alias for backward saved tensor
+    h1_mlp_pow = h1_mlp__to_copy  # alias (backward uses relu_fp32 directly)
 
     # self.transformer.h.1.mlp.c_proj (Linear)
     # /.autoresearch_repo/train.py:103
     # x = self.c_proj(x)
     h1_mlp_c_proj__to_copy: 'bfloat16[512, 2048]' = aten._to_copy(transformer_h_1_mlp_c_proj_weight, dtype=torch.bfloat16)  # strides=(2048, 1), contiguous=True, view=False
-    h1_mlp_c_proj__to_copy_1: 'bfloat16[32, 2048, 2048]' = aten._to_copy(h1_mlp_pow, dtype=torch.bfloat16)  # strides=(4194304, 2048, 1), contiguous=True, view=False
+    h1_mlp_c_proj__to_copy_1 = _sqrelu_fwd_sq_1  # FUSED: already bf16 from triton_squared_relu_fwd
     h1_mlp_c_proj_t: 'bfloat16[2048, 512]' = aten.t(h1_mlp_c_proj__to_copy)  # strides=(1, 2048), contiguous=False, view=True
     h1_mlp_c_proj_view: 'bfloat16[65536, 2048]' = aten.view(h1_mlp_c_proj__to_copy_1, [65536, 2048])  # strides=(2048, 1), contiguous=True, view=True
     h1_mlp_c_proj_mm: 'bfloat16[65536, 512]' = aten.mm(h1_mlp_c_proj_view, h1_mlp_c_proj_t)  # strides=(512, 1), contiguous=True, view=False
@@ -920,16 +951,15 @@ def forward(
     # self.transformer.h.2.mlp (MLP)
     # /.autoresearch_repo/train.py:102
     # x = F.relu(x).square()
-    h2_mlp_relu: 'bfloat16[32, 2048, 2048]' = aten.relu(h2_mlp_c_fc__unsafe_view)  # strides=(4194304, 2048, 1), contiguous=True, view=False
-    h2_mlp_detach: 'bfloat16[32, 2048, 2048]' = aten.detach(h2_mlp_relu)  # strides=(4194304, 2048, 1), contiguous=True, view=True
-    h2_mlp__to_copy: 'float32[32, 2048, 2048]' = aten._to_copy(h2_mlp_relu, dtype=torch.float32)  # strides=(4194304, 2048, 1), contiguous=True, view=False
-    h2_mlp_pow: 'float32[32, 2048, 2048]' = aten.pow.Tensor_Scalar(h2_mlp__to_copy, 2)  # strides=(4194304, 2048, 1), contiguous=True, view=False
+    h2_mlp_relu, h2_mlp__to_copy, _sqrelu_fwd_sq_2 = triton_squared_relu_fwd(h2_mlp_c_fc__unsafe_view)  # FUSED: squared ReLU forward via Triton
+    h2_mlp_detach = h2_mlp_relu  # alias for backward saved tensor
+    h2_mlp_pow = h2_mlp__to_copy  # alias (backward uses relu_fp32 directly)
 
     # self.transformer.h.2.mlp.c_proj (Linear)
     # /.autoresearch_repo/train.py:103
     # x = self.c_proj(x)
     h2_mlp_c_proj__to_copy: 'bfloat16[512, 2048]' = aten._to_copy(transformer_h_2_mlp_c_proj_weight, dtype=torch.bfloat16)  # strides=(2048, 1), contiguous=True, view=False
-    h2_mlp_c_proj__to_copy_1: 'bfloat16[32, 2048, 2048]' = aten._to_copy(h2_mlp_pow, dtype=torch.bfloat16)  # strides=(4194304, 2048, 1), contiguous=True, view=False
+    h2_mlp_c_proj__to_copy_1 = _sqrelu_fwd_sq_2  # FUSED: already bf16 from triton_squared_relu_fwd
     h2_mlp_c_proj_t: 'bfloat16[2048, 512]' = aten.t(h2_mlp_c_proj__to_copy)  # strides=(1, 2048), contiguous=False, view=True
     h2_mlp_c_proj_view: 'bfloat16[65536, 2048]' = aten.view(h2_mlp_c_proj__to_copy_1, [65536, 2048])  # strides=(2048, 1), contiguous=True, view=True
     h2_mlp_c_proj_mm: 'bfloat16[65536, 512]' = aten.mm(h2_mlp_c_proj_view, h2_mlp_c_proj_t)  # strides=(512, 1), contiguous=True, view=False
@@ -1098,16 +1128,15 @@ def forward(
     # self.transformer.h.3.mlp (MLP)
     # /.autoresearch_repo/train.py:102
     # x = F.relu(x).square()
-    h3_mlp_relu: 'bfloat16[32, 2048, 2048]' = aten.relu(h3_mlp_c_fc__unsafe_view)  # strides=(4194304, 2048, 1), contiguous=True, view=False
-    h3_mlp_detach: 'bfloat16[32, 2048, 2048]' = aten.detach(h3_mlp_relu)  # strides=(4194304, 2048, 1), contiguous=True, view=True
-    h3_mlp__to_copy: 'float32[32, 2048, 2048]' = aten._to_copy(h3_mlp_relu, dtype=torch.float32)  # strides=(4194304, 2048, 1), contiguous=True, view=False
-    h3_mlp_pow: 'float32[32, 2048, 2048]' = aten.pow.Tensor_Scalar(h3_mlp__to_copy, 2)  # strides=(4194304, 2048, 1), contiguous=True, view=False
+    h3_mlp_relu, h3_mlp__to_copy, _sqrelu_fwd_sq_3 = triton_squared_relu_fwd(h3_mlp_c_fc__unsafe_view)  # FUSED: squared ReLU forward via Triton
+    h3_mlp_detach = h3_mlp_relu  # alias for backward saved tensor
+    h3_mlp_pow = h3_mlp__to_copy  # alias (backward uses relu_fp32 directly)
 
     # self.transformer.h.3.mlp.c_proj (Linear)
     # /.autoresearch_repo/train.py:103
     # x = self.c_proj(x)
     h3_mlp_c_proj__to_copy: 'bfloat16[512, 2048]' = aten._to_copy(transformer_h_3_mlp_c_proj_weight, dtype=torch.bfloat16)  # strides=(2048, 1), contiguous=True, view=False
-    h3_mlp_c_proj__to_copy_1: 'bfloat16[32, 2048, 2048]' = aten._to_copy(h3_mlp_pow, dtype=torch.bfloat16)  # strides=(4194304, 2048, 1), contiguous=True, view=False
+    h3_mlp_c_proj__to_copy_1 = _sqrelu_fwd_sq_3  # FUSED: already bf16 from triton_squared_relu_fwd
     h3_mlp_c_proj_t: 'bfloat16[2048, 512]' = aten.t(h3_mlp_c_proj__to_copy)  # strides=(1, 2048), contiguous=False, view=True
     h3_mlp_c_proj_view: 'bfloat16[65536, 2048]' = aten.view(h3_mlp_c_proj__to_copy_1, [65536, 2048])  # strides=(2048, 1), contiguous=True, view=True
     h3_mlp_c_proj_mm: 'bfloat16[65536, 512]' = aten.mm(h3_mlp_c_proj_view, h3_mlp_c_proj_t)  # strides=(512, 1), contiguous=True, view=False
@@ -1248,16 +1277,15 @@ def forward(
     # self.transformer.h.4.mlp (MLP)
     # /.autoresearch_repo/train.py:102
     # x = F.relu(x).square()
-    h4_mlp_relu: 'bfloat16[32, 2048, 2048]' = aten.relu(h4_mlp_c_fc__unsafe_view)  # strides=(4194304, 2048, 1), contiguous=True, view=False
-    h4_mlp_detach: 'bfloat16[32, 2048, 2048]' = aten.detach(h4_mlp_relu)  # strides=(4194304, 2048, 1), contiguous=True, view=True
-    h4_mlp__to_copy: 'float32[32, 2048, 2048]' = aten._to_copy(h4_mlp_relu, dtype=torch.float32)  # strides=(4194304, 2048, 1), contiguous=True, view=False
-    h4_mlp_pow: 'float32[32, 2048, 2048]' = aten.pow.Tensor_Scalar(h4_mlp__to_copy, 2)  # strides=(4194304, 2048, 1), contiguous=True, view=False
+    h4_mlp_relu, h4_mlp__to_copy, _sqrelu_fwd_sq_4 = triton_squared_relu_fwd(h4_mlp_c_fc__unsafe_view)  # FUSED: squared ReLU forward via Triton
+    h4_mlp_detach = h4_mlp_relu  # alias for backward saved tensor
+    h4_mlp_pow = h4_mlp__to_copy  # alias (backward uses relu_fp32 directly)
 
     # self.transformer.h.4.mlp.c_proj (Linear)
     # /.autoresearch_repo/train.py:103
     # x = self.c_proj(x)
     h4_mlp_c_proj__to_copy: 'bfloat16[512, 2048]' = aten._to_copy(transformer_h_4_mlp_c_proj_weight, dtype=torch.bfloat16)  # strides=(2048, 1), contiguous=True, view=False
-    h4_mlp_c_proj__to_copy_1: 'bfloat16[32, 2048, 2048]' = aten._to_copy(h4_mlp_pow, dtype=torch.bfloat16)  # strides=(4194304, 2048, 1), contiguous=True, view=False
+    h4_mlp_c_proj__to_copy_1 = _sqrelu_fwd_sq_4  # FUSED: already bf16 from triton_squared_relu_fwd
     h4_mlp_c_proj_t: 'bfloat16[2048, 512]' = aten.t(h4_mlp_c_proj__to_copy)  # strides=(1, 2048), contiguous=False, view=True
     h4_mlp_c_proj_view: 'bfloat16[65536, 2048]' = aten.view(h4_mlp_c_proj__to_copy_1, [65536, 2048])  # strides=(2048, 1), contiguous=True, view=True
     h4_mlp_c_proj_mm: 'bfloat16[65536, 512]' = aten.mm(h4_mlp_c_proj_view, h4_mlp_c_proj_t)  # strides=(512, 1), contiguous=True, view=False
@@ -1427,16 +1455,15 @@ def forward(
     # self.transformer.h.5.mlp (MLP)
     # /.autoresearch_repo/train.py:102
     # x = F.relu(x).square()
-    h5_mlp_relu: 'bfloat16[32, 2048, 2048]' = aten.relu(h5_mlp_c_fc__unsafe_view)  # strides=(4194304, 2048, 1), contiguous=True, view=False
-    h5_mlp_detach: 'bfloat16[32, 2048, 2048]' = aten.detach(h5_mlp_relu)  # strides=(4194304, 2048, 1), contiguous=True, view=True
-    h5_mlp__to_copy: 'float32[32, 2048, 2048]' = aten._to_copy(h5_mlp_relu, dtype=torch.float32)  # strides=(4194304, 2048, 1), contiguous=True, view=False
-    h5_mlp_pow: 'float32[32, 2048, 2048]' = aten.pow.Tensor_Scalar(h5_mlp__to_copy, 2)  # strides=(4194304, 2048, 1), contiguous=True, view=False
+    h5_mlp_relu, h5_mlp__to_copy, _sqrelu_fwd_sq_5 = triton_squared_relu_fwd(h5_mlp_c_fc__unsafe_view)  # FUSED: squared ReLU forward via Triton
+    h5_mlp_detach = h5_mlp_relu  # alias for backward saved tensor
+    h5_mlp_pow = h5_mlp__to_copy  # alias (backward uses relu_fp32 directly)
 
     # self.transformer.h.5.mlp.c_proj (Linear)
     # /.autoresearch_repo/train.py:103
     # x = self.c_proj(x)
     h5_mlp_c_proj__to_copy: 'bfloat16[512, 2048]' = aten._to_copy(transformer_h_5_mlp_c_proj_weight, dtype=torch.bfloat16)  # strides=(2048, 1), contiguous=True, view=False
-    h5_mlp_c_proj__to_copy_1: 'bfloat16[32, 2048, 2048]' = aten._to_copy(h5_mlp_pow, dtype=torch.bfloat16)  # strides=(4194304, 2048, 1), contiguous=True, view=False
+    h5_mlp_c_proj__to_copy_1 = _sqrelu_fwd_sq_5  # FUSED: already bf16 from triton_squared_relu_fwd
     h5_mlp_c_proj_t: 'bfloat16[2048, 512]' = aten.t(h5_mlp_c_proj__to_copy)  # strides=(1, 2048), contiguous=False, view=True
     h5_mlp_c_proj_view: 'bfloat16[65536, 2048]' = aten.view(h5_mlp_c_proj__to_copy_1, [65536, 2048])  # strides=(2048, 1), contiguous=True, view=True
     h5_mlp_c_proj_mm: 'bfloat16[65536, 512]' = aten.mm(h5_mlp_c_proj_view, h5_mlp_c_proj_t)  # strides=(512, 1), contiguous=True, view=False
@@ -1577,16 +1604,15 @@ def forward(
     # self.transformer.h.6.mlp (MLP)
     # /.autoresearch_repo/train.py:102
     # x = F.relu(x).square()
-    h6_mlp_relu: 'bfloat16[32, 2048, 2048]' = aten.relu(h6_mlp_c_fc__unsafe_view)  # strides=(4194304, 2048, 1), contiguous=True, view=False
-    h6_mlp_detach: 'bfloat16[32, 2048, 2048]' = aten.detach(h6_mlp_relu)  # strides=(4194304, 2048, 1), contiguous=True, view=True
-    h6_mlp__to_copy: 'float32[32, 2048, 2048]' = aten._to_copy(h6_mlp_relu, dtype=torch.float32)  # strides=(4194304, 2048, 1), contiguous=True, view=False
-    h6_mlp_pow: 'float32[32, 2048, 2048]' = aten.pow.Tensor_Scalar(h6_mlp__to_copy, 2)  # strides=(4194304, 2048, 1), contiguous=True, view=False
+    h6_mlp_relu, h6_mlp__to_copy, _sqrelu_fwd_sq_6 = triton_squared_relu_fwd(h6_mlp_c_fc__unsafe_view)  # FUSED: squared ReLU forward via Triton
+    h6_mlp_detach = h6_mlp_relu  # alias for backward saved tensor
+    h6_mlp_pow = h6_mlp__to_copy  # alias (backward uses relu_fp32 directly)
 
     # self.transformer.h.6.mlp.c_proj (Linear)
     # /.autoresearch_repo/train.py:103
     # x = self.c_proj(x)
     h6_mlp_c_proj__to_copy: 'bfloat16[512, 2048]' = aten._to_copy(transformer_h_6_mlp_c_proj_weight, dtype=torch.bfloat16)  # strides=(2048, 1), contiguous=True, view=False
-    h6_mlp_c_proj__to_copy_1: 'bfloat16[32, 2048, 2048]' = aten._to_copy(h6_mlp_pow, dtype=torch.bfloat16)  # strides=(4194304, 2048, 1), contiguous=True, view=False
+    h6_mlp_c_proj__to_copy_1 = _sqrelu_fwd_sq_6  # FUSED: already bf16 from triton_squared_relu_fwd
     h6_mlp_c_proj_t: 'bfloat16[2048, 512]' = aten.t(h6_mlp_c_proj__to_copy)  # strides=(1, 2048), contiguous=False, view=True
     h6_mlp_c_proj_view: 'bfloat16[65536, 2048]' = aten.view(h6_mlp_c_proj__to_copy_1, [65536, 2048])  # strides=(2048, 1), contiguous=True, view=True
     h6_mlp_c_proj_mm: 'bfloat16[65536, 512]' = aten.mm(h6_mlp_c_proj_view, h6_mlp_c_proj_t)  # strides=(512, 1), contiguous=True, view=False
@@ -1755,16 +1781,15 @@ def forward(
     # self.transformer.h.7.mlp (MLP)
     # /.autoresearch_repo/train.py:102
     # x = F.relu(x).square()
-    h7_mlp_relu: 'bfloat16[32, 2048, 2048]' = aten.relu(h7_mlp_c_fc__unsafe_view)  # strides=(4194304, 2048, 1), contiguous=True, view=False
-    h7_mlp_detach: 'bfloat16[32, 2048, 2048]' = aten.detach(h7_mlp_relu)  # strides=(4194304, 2048, 1), contiguous=True, view=True
-    h7_mlp__to_copy: 'float32[32, 2048, 2048]' = aten._to_copy(h7_mlp_relu, dtype=torch.float32)  # strides=(4194304, 2048, 1), contiguous=True, view=False
-    h7_mlp_pow: 'float32[32, 2048, 2048]' = aten.pow.Tensor_Scalar(h7_mlp__to_copy, 2)  # strides=(4194304, 2048, 1), contiguous=True, view=False
+    h7_mlp_relu, h7_mlp__to_copy, _sqrelu_fwd_sq_7 = triton_squared_relu_fwd(h7_mlp_c_fc__unsafe_view)  # FUSED: squared ReLU forward via Triton
+    h7_mlp_detach = h7_mlp_relu  # alias for backward saved tensor
+    h7_mlp_pow = h7_mlp__to_copy  # alias (backward uses relu_fp32 directly)
 
     # self.transformer.h.7.mlp.c_proj (Linear)
     # /.autoresearch_repo/train.py:103
     # x = self.c_proj(x)
     h7_mlp_c_proj__to_copy: 'bfloat16[512, 2048]' = aten._to_copy(transformer_h_7_mlp_c_proj_weight, dtype=torch.bfloat16)  # strides=(2048, 1), contiguous=True, view=False
-    h7_mlp_c_proj__to_copy_1: 'bfloat16[32, 2048, 2048]' = aten._to_copy(h7_mlp_pow, dtype=torch.bfloat16)  # strides=(4194304, 2048, 1), contiguous=True, view=False
+    h7_mlp_c_proj__to_copy_1 = _sqrelu_fwd_sq_7  # FUSED: already bf16 from triton_squared_relu_fwd
     h7_mlp_c_proj_t: 'bfloat16[2048, 512]' = aten.t(h7_mlp_c_proj__to_copy)  # strides=(1, 2048), contiguous=False, view=True
     h7_mlp_c_proj_view: 'bfloat16[65536, 2048]' = aten.view(h7_mlp_c_proj__to_copy_1, [65536, 2048])  # strides=(2048, 1), contiguous=True, view=True
     h7_mlp_c_proj_mm: 'bfloat16[65536, 512]' = aten.mm(h7_mlp_c_proj_view, h7_mlp_c_proj_t)  # strides=(512, 1), contiguous=True, view=False

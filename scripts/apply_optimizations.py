@@ -901,6 +901,7 @@ def main():
     )
     parser.add_argument("--list", action="store_true", help="List available optimizations")
     parser.add_argument("--dry-run", action="store_true", help="Print changes without writing")
+    parser.add_argument("--skip", nargs="*", default=[], help="Skip these optimizations (even as prerequisites)")
     parser.add_argument(
         "--file",
         type=Path,
@@ -945,9 +946,12 @@ def main():
 
     # Apply in order. For single-target mode, we apply all preceding
     # optimizations silently as prerequisites (each builds on the previous).
+    skip_set = set(args.skip)
     applied = []
     target_reached = False
     for name, fn in OPTIMIZATIONS:
+        if name in skip_set:
+            continue
         if name in targets:
             # This is a requested optimization
             print(f"Applying: {name}")

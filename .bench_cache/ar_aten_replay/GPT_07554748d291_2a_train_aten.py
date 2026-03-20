@@ -2165,28 +2165,8 @@ def backward(
     grad_h7_attn_detach_2: 'float32[32, 2048, 4, 1]' = aten.detach(detach_48)  # strides=(8192, 4, 1, 1), contiguous=True, view=True
     grad_h7_attn__fused_rms_norm_backward_1 = aten._fused_rms_norm_backward(grad_h7_attn_transpose_3, cat_14, [128], grad_h7_attn_detach_2, None, [True, False])  # out0: strides=(1048576, 512, 128, 1), contiguous=True, view=False
     grad_h7_attn_getitem_4: 'bfloat16[32, 2048, 4, 128]' = operator.getitem(grad_h7_attn__fused_rms_norm_backward_1, 0)  # strides=(1048576, 512, 128, 1), contiguous=True, view=True
-    grad_h7_attn_slice: 'bfloat16[32, 2048, 4, 64]' = aten.slice.Tensor(grad_h7_attn_getitem_3, 3, 0, 64)  # strides=(1048576, 512, 128, 1), contiguous=False, view=True
-    grad_h7_attn_slice_1: 'bfloat16[32, 2048, 4, 64]' = aten.slice.Tensor(grad_h7_attn_getitem_3, 3, 64, 128)  # strides=(1048576, 512, 128, 1), contiguous=False, view=True
-    grad_h7_attn_mul: 'bfloat16[32, 2048, 4, 64]' = aten.mul.Tensor(grad_h7_attn_slice_1, slice_1)  # strides=(524288, 256, 64, 1), contiguous=True, view=False
-    grad_h7_attn_mul_1: 'bfloat16[32, 2048, 4, 64]' = aten.mul.Tensor(grad_h7_attn_slice_1, neg_15)  # strides=(524288, 256, 64, 1), contiguous=True, view=False
-    grad_h7_attn_mul_2: 'bfloat16[32, 2048, 4, 64]' = aten.mul.Tensor(grad_h7_attn_slice, slice_2)  # strides=(524288, 256, 64, 1), contiguous=True, view=False
-    add_67: 'bfloat16[32, 2048, 4, 64]' = aten.add.Tensor(grad_h7_attn_mul, grad_h7_attn_mul_2)  # strides=(524288, 256, 64, 1), contiguous=True, view=False
-    grad_h7_attn_mul_3: 'bfloat16[32, 2048, 4, 64]' = aten.mul.Tensor(grad_h7_attn_slice, slice_1)  # strides=(524288, 256, 64, 1), contiguous=True, view=False
-    add_68: 'bfloat16[32, 2048, 4, 64]' = aten.add.Tensor(grad_h7_attn_mul_1, grad_h7_attn_mul_3)  # strides=(524288, 256, 64, 1), contiguous=True, view=False
-    grad_h7_attn_slice_backward: 'bfloat16[32, 2048, 4, 128]' = aten.slice_backward(add_67, [32, 2048, 4, 128], 3, 64, 9223372036854775807, 1)  # strides=(1048576, 512, 128, 1), contiguous=True, view=False
-    grad_h7_attn_slice_backward_1: 'bfloat16[32, 2048, 4, 128]' = aten.slice_backward(add_68, [32, 2048, 4, 128], 3, 0, 64, 1)  # strides=(1048576, 512, 128, 1), contiguous=True, view=False
-    add_69: 'bfloat16[32, 2048, 4, 128]' = aten.add.Tensor(grad_h7_attn_slice_backward, grad_h7_attn_slice_backward_1)  # strides=(1048576, 512, 128, 1), contiguous=True, view=False
-    grad_h7_attn_slice_2: 'bfloat16[32, 2048, 4, 64]' = aten.slice.Tensor(grad_h7_attn_getitem_4, 3, 0, 64)  # strides=(1048576, 512, 128, 1), contiguous=False, view=True
-    grad_h7_attn_slice_3: 'bfloat16[32, 2048, 4, 64]' = aten.slice.Tensor(grad_h7_attn_getitem_4, 3, 64, 128)  # strides=(1048576, 512, 128, 1), contiguous=False, view=True
-    grad_h7_attn_mul_4: 'bfloat16[32, 2048, 4, 64]' = aten.mul.Tensor(grad_h7_attn_slice_3, slice_1)  # strides=(524288, 256, 64, 1), contiguous=True, view=False
-    grad_h7_attn_mul_5: 'bfloat16[32, 2048, 4, 64]' = aten.mul.Tensor(grad_h7_attn_slice_3, neg_14)  # strides=(524288, 256, 64, 1), contiguous=True, view=False
-    grad_h7_attn_mul_6: 'bfloat16[32, 2048, 4, 64]' = aten.mul.Tensor(grad_h7_attn_slice_2, slice_2)  # strides=(524288, 256, 64, 1), contiguous=True, view=False
-    add_70: 'bfloat16[32, 2048, 4, 64]' = aten.add.Tensor(grad_h7_attn_mul_4, grad_h7_attn_mul_6)  # strides=(524288, 256, 64, 1), contiguous=True, view=False
-    grad_h7_attn_mul_7: 'bfloat16[32, 2048, 4, 64]' = aten.mul.Tensor(grad_h7_attn_slice_2, slice_1)  # strides=(524288, 256, 64, 1), contiguous=True, view=False
-    add_71: 'bfloat16[32, 2048, 4, 64]' = aten.add.Tensor(grad_h7_attn_mul_5, grad_h7_attn_mul_7)  # strides=(524288, 256, 64, 1), contiguous=True, view=False
-    grad_h7_attn_slice_backward_2: 'bfloat16[32, 2048, 4, 128]' = aten.slice_backward(add_70, [32, 2048, 4, 128], 3, 64, 9223372036854775807, 1)  # strides=(1048576, 512, 128, 1), contiguous=True, view=False
-    grad_h7_attn_slice_backward_3: 'bfloat16[32, 2048, 4, 128]' = aten.slice_backward(add_71, [32, 2048, 4, 128], 3, 0, 64, 1)  # strides=(1048576, 512, 128, 1), contiguous=True, view=False
-    add_72: 'bfloat16[32, 2048, 4, 128]' = aten.add.Tensor(grad_h7_attn_slice_backward_2, grad_h7_attn_slice_backward_3)  # strides=(1048576, 512, 128, 1), contiguous=True, view=False
+    add_69 = torch_rope_fwd(grad_h7_attn_getitem_3, slice_1, neg_15)  # FUSED: backward RoPE (11 ops -> 4 kernels)
+    add_72 = torch_rope_fwd(grad_h7_attn_getitem_4, slice_1, neg_14)  # FUSED: backward RoPE (11 ops -> 4 kernels)
     grad_h7_attn_mul_8: 'bfloat16[32, 2048, 4, 128]' = aten.mul.Tensor(grad_h7_attn_transpose_1, unsqueeze_15)  # strides=(1048576, 512, 128, 1), contiguous=True, view=False
     grad_h7_attn_mul_9: 'bfloat16[32, 2048, 4, 128]' = aten.mul.Tensor(grad_h7_attn_transpose_1, view_82)  # strides=(1048576, 512, 128, 1), contiguous=True, view=False
     grad_h7_attn_sum: 'float32[32, 2048, 4, 1]' = aten.sum.dim_IntList(grad_h7_attn_mul_9, [3], True, dtype=torch.float32)  # strides=(8192, 4, 1, 1), contiguous=True, view=False
@@ -2372,28 +2352,8 @@ def backward(
     grad_h6_attn_detach_2: 'float32[32, 2048, 4, 1]' = aten.detach(detach_41)  # strides=(8192, 4, 1, 1), contiguous=True, view=True
     grad_h6_attn__fused_rms_norm_backward_1 = aten._fused_rms_norm_backward(grad_h6_attn_transpose_3, cat_12, [128], grad_h6_attn_detach_2, None, [True, False])  # out0: strides=(1048576, 512, 128, 1), contiguous=True, view=False
     grad_h6_attn_getitem_4: 'bfloat16[32, 2048, 4, 128]' = operator.getitem(grad_h6_attn__fused_rms_norm_backward_1, 0)  # strides=(1048576, 512, 128, 1), contiguous=True, view=True
-    grad_h6_attn_slice: 'bfloat16[32, 2048, 4, 64]' = aten.slice.Tensor(grad_h6_attn_getitem_3, 3, 0, 64)  # strides=(1048576, 512, 128, 1), contiguous=False, view=True
-    grad_h6_attn_slice_1: 'bfloat16[32, 2048, 4, 64]' = aten.slice.Tensor(grad_h6_attn_getitem_3, 3, 64, 128)  # strides=(1048576, 512, 128, 1), contiguous=False, view=True
-    grad_h6_attn_mul: 'bfloat16[32, 2048, 4, 64]' = aten.mul.Tensor(grad_h6_attn_slice_1, slice_1)  # strides=(524288, 256, 64, 1), contiguous=True, view=False
-    grad_h6_attn_mul_1: 'bfloat16[32, 2048, 4, 64]' = aten.mul.Tensor(grad_h6_attn_slice_1, neg_13)  # strides=(524288, 256, 64, 1), contiguous=True, view=False
-    grad_h6_attn_mul_2: 'bfloat16[32, 2048, 4, 64]' = aten.mul.Tensor(grad_h6_attn_slice, slice_2)  # strides=(524288, 256, 64, 1), contiguous=True, view=False
-    add_78: 'bfloat16[32, 2048, 4, 64]' = aten.add.Tensor(grad_h6_attn_mul, grad_h6_attn_mul_2)  # strides=(524288, 256, 64, 1), contiguous=True, view=False
-    grad_h6_attn_mul_3: 'bfloat16[32, 2048, 4, 64]' = aten.mul.Tensor(grad_h6_attn_slice, slice_1)  # strides=(524288, 256, 64, 1), contiguous=True, view=False
-    add_79: 'bfloat16[32, 2048, 4, 64]' = aten.add.Tensor(grad_h6_attn_mul_1, grad_h6_attn_mul_3)  # strides=(524288, 256, 64, 1), contiguous=True, view=False
-    grad_h6_attn_slice_backward: 'bfloat16[32, 2048, 4, 128]' = aten.slice_backward(add_78, [32, 2048, 4, 128], 3, 64, 9223372036854775807, 1)  # strides=(1048576, 512, 128, 1), contiguous=True, view=False
-    grad_h6_attn_slice_backward_1: 'bfloat16[32, 2048, 4, 128]' = aten.slice_backward(add_79, [32, 2048, 4, 128], 3, 0, 64, 1)  # strides=(1048576, 512, 128, 1), contiguous=True, view=False
-    add_80: 'bfloat16[32, 2048, 4, 128]' = aten.add.Tensor(grad_h6_attn_slice_backward, grad_h6_attn_slice_backward_1)  # strides=(1048576, 512, 128, 1), contiguous=True, view=False
-    grad_h6_attn_slice_2: 'bfloat16[32, 2048, 4, 64]' = aten.slice.Tensor(grad_h6_attn_getitem_4, 3, 0, 64)  # strides=(1048576, 512, 128, 1), contiguous=False, view=True
-    grad_h6_attn_slice_3: 'bfloat16[32, 2048, 4, 64]' = aten.slice.Tensor(grad_h6_attn_getitem_4, 3, 64, 128)  # strides=(1048576, 512, 128, 1), contiguous=False, view=True
-    grad_h6_attn_mul_4: 'bfloat16[32, 2048, 4, 64]' = aten.mul.Tensor(grad_h6_attn_slice_3, slice_1)  # strides=(524288, 256, 64, 1), contiguous=True, view=False
-    grad_h6_attn_mul_5: 'bfloat16[32, 2048, 4, 64]' = aten.mul.Tensor(grad_h6_attn_slice_3, neg_12)  # strides=(524288, 256, 64, 1), contiguous=True, view=False
-    grad_h6_attn_mul_6: 'bfloat16[32, 2048, 4, 64]' = aten.mul.Tensor(grad_h6_attn_slice_2, slice_2)  # strides=(524288, 256, 64, 1), contiguous=True, view=False
-    add_81: 'bfloat16[32, 2048, 4, 64]' = aten.add.Tensor(grad_h6_attn_mul_4, grad_h6_attn_mul_6)  # strides=(524288, 256, 64, 1), contiguous=True, view=False
-    grad_h6_attn_mul_7: 'bfloat16[32, 2048, 4, 64]' = aten.mul.Tensor(grad_h6_attn_slice_2, slice_1)  # strides=(524288, 256, 64, 1), contiguous=True, view=False
-    add_82: 'bfloat16[32, 2048, 4, 64]' = aten.add.Tensor(grad_h6_attn_mul_5, grad_h6_attn_mul_7)  # strides=(524288, 256, 64, 1), contiguous=True, view=False
-    grad_h6_attn_slice_backward_2: 'bfloat16[32, 2048, 4, 128]' = aten.slice_backward(add_81, [32, 2048, 4, 128], 3, 64, 9223372036854775807, 1)  # strides=(1048576, 512, 128, 1), contiguous=True, view=False
-    grad_h6_attn_slice_backward_3: 'bfloat16[32, 2048, 4, 128]' = aten.slice_backward(add_82, [32, 2048, 4, 128], 3, 0, 64, 1)  # strides=(1048576, 512, 128, 1), contiguous=True, view=False
-    add_83: 'bfloat16[32, 2048, 4, 128]' = aten.add.Tensor(grad_h6_attn_slice_backward_2, grad_h6_attn_slice_backward_3)  # strides=(1048576, 512, 128, 1), contiguous=True, view=False
+    add_80 = torch_rope_fwd(grad_h6_attn_getitem_3, slice_1, neg_13)  # FUSED: backward RoPE (11 ops -> 4 kernels)
+    add_83 = torch_rope_fwd(grad_h6_attn_getitem_4, slice_1, neg_12)  # FUSED: backward RoPE (11 ops -> 4 kernels)
     grad_h6_attn_view_1: 'bfloat16[32, 2048, 512]' = aten.view(grad_h6_attn_transpose_1, [32, 2048, 512])  # strides=(1048576, 512, 1), contiguous=True, view=True
 
     # grad of self.transformer.h.6.attn.c_v (Linear) → d_loss/d_c_v
@@ -2545,28 +2505,8 @@ def backward(
     grad_h5_attn_detach_2: 'float32[32, 2048, 4, 1]' = aten.detach(detach_35)  # strides=(8192, 4, 1, 1), contiguous=True, view=True
     grad_h5_attn__fused_rms_norm_backward_1 = aten._fused_rms_norm_backward(grad_h5_attn_transpose_3, cat_10, [128], grad_h5_attn_detach_2, None, [True, False])  # out0: strides=(1048576, 512, 128, 1), contiguous=True, view=False
     grad_h5_attn_getitem_4: 'bfloat16[32, 2048, 4, 128]' = operator.getitem(grad_h5_attn__fused_rms_norm_backward_1, 0)  # strides=(1048576, 512, 128, 1), contiguous=True, view=True
-    grad_h5_attn_slice: 'bfloat16[32, 2048, 4, 64]' = aten.slice.Tensor(grad_h5_attn_getitem_3, 3, 0, 64)  # strides=(1048576, 512, 128, 1), contiguous=False, view=True
-    grad_h5_attn_slice_1: 'bfloat16[32, 2048, 4, 64]' = aten.slice.Tensor(grad_h5_attn_getitem_3, 3, 64, 128)  # strides=(1048576, 512, 128, 1), contiguous=False, view=True
-    grad_h5_attn_mul: 'bfloat16[32, 2048, 4, 64]' = aten.mul.Tensor(grad_h5_attn_slice_1, slice_1)  # strides=(524288, 256, 64, 1), contiguous=True, view=False
-    grad_h5_attn_mul_1: 'bfloat16[32, 2048, 4, 64]' = aten.mul.Tensor(grad_h5_attn_slice_1, neg_11)  # strides=(524288, 256, 64, 1), contiguous=True, view=False
-    grad_h5_attn_mul_2: 'bfloat16[32, 2048, 4, 64]' = aten.mul.Tensor(grad_h5_attn_slice, slice_2)  # strides=(524288, 256, 64, 1), contiguous=True, view=False
-    add_91: 'bfloat16[32, 2048, 4, 64]' = aten.add.Tensor(grad_h5_attn_mul, grad_h5_attn_mul_2)  # strides=(524288, 256, 64, 1), contiguous=True, view=False
-    grad_h5_attn_mul_3: 'bfloat16[32, 2048, 4, 64]' = aten.mul.Tensor(grad_h5_attn_slice, slice_1)  # strides=(524288, 256, 64, 1), contiguous=True, view=False
-    add_92: 'bfloat16[32, 2048, 4, 64]' = aten.add.Tensor(grad_h5_attn_mul_1, grad_h5_attn_mul_3)  # strides=(524288, 256, 64, 1), contiguous=True, view=False
-    grad_h5_attn_slice_backward: 'bfloat16[32, 2048, 4, 128]' = aten.slice_backward(add_91, [32, 2048, 4, 128], 3, 64, 9223372036854775807, 1)  # strides=(1048576, 512, 128, 1), contiguous=True, view=False
-    grad_h5_attn_slice_backward_1: 'bfloat16[32, 2048, 4, 128]' = aten.slice_backward(add_92, [32, 2048, 4, 128], 3, 0, 64, 1)  # strides=(1048576, 512, 128, 1), contiguous=True, view=False
-    add_93: 'bfloat16[32, 2048, 4, 128]' = aten.add.Tensor(grad_h5_attn_slice_backward, grad_h5_attn_slice_backward_1)  # strides=(1048576, 512, 128, 1), contiguous=True, view=False
-    grad_h5_attn_slice_2: 'bfloat16[32, 2048, 4, 64]' = aten.slice.Tensor(grad_h5_attn_getitem_4, 3, 0, 64)  # strides=(1048576, 512, 128, 1), contiguous=False, view=True
-    grad_h5_attn_slice_3: 'bfloat16[32, 2048, 4, 64]' = aten.slice.Tensor(grad_h5_attn_getitem_4, 3, 64, 128)  # strides=(1048576, 512, 128, 1), contiguous=False, view=True
-    grad_h5_attn_mul_4: 'bfloat16[32, 2048, 4, 64]' = aten.mul.Tensor(grad_h5_attn_slice_3, slice_1)  # strides=(524288, 256, 64, 1), contiguous=True, view=False
-    grad_h5_attn_mul_5: 'bfloat16[32, 2048, 4, 64]' = aten.mul.Tensor(grad_h5_attn_slice_3, neg_10)  # strides=(524288, 256, 64, 1), contiguous=True, view=False
-    grad_h5_attn_mul_6: 'bfloat16[32, 2048, 4, 64]' = aten.mul.Tensor(grad_h5_attn_slice_2, slice_2)  # strides=(524288, 256, 64, 1), contiguous=True, view=False
-    add_94: 'bfloat16[32, 2048, 4, 64]' = aten.add.Tensor(grad_h5_attn_mul_4, grad_h5_attn_mul_6)  # strides=(524288, 256, 64, 1), contiguous=True, view=False
-    grad_h5_attn_mul_7: 'bfloat16[32, 2048, 4, 64]' = aten.mul.Tensor(grad_h5_attn_slice_2, slice_1)  # strides=(524288, 256, 64, 1), contiguous=True, view=False
-    add_95: 'bfloat16[32, 2048, 4, 64]' = aten.add.Tensor(grad_h5_attn_mul_5, grad_h5_attn_mul_7)  # strides=(524288, 256, 64, 1), contiguous=True, view=False
-    grad_h5_attn_slice_backward_2: 'bfloat16[32, 2048, 4, 128]' = aten.slice_backward(add_94, [32, 2048, 4, 128], 3, 64, 9223372036854775807, 1)  # strides=(1048576, 512, 128, 1), contiguous=True, view=False
-    grad_h5_attn_slice_backward_3: 'bfloat16[32, 2048, 4, 128]' = aten.slice_backward(add_95, [32, 2048, 4, 128], 3, 0, 64, 1)  # strides=(1048576, 512, 128, 1), contiguous=True, view=False
-    add_96: 'bfloat16[32, 2048, 4, 128]' = aten.add.Tensor(grad_h5_attn_slice_backward_2, grad_h5_attn_slice_backward_3)  # strides=(1048576, 512, 128, 1), contiguous=True, view=False
+    add_93 = torch_rope_fwd(grad_h5_attn_getitem_3, slice_1, neg_11)  # FUSED: backward RoPE (11 ops -> 4 kernels)
+    add_96 = torch_rope_fwd(grad_h5_attn_getitem_4, slice_1, neg_10)  # FUSED: backward RoPE (11 ops -> 4 kernels)
     grad_h5_attn_mul_8: 'bfloat16[32, 2048, 4, 128]' = aten.mul.Tensor(grad_h5_attn_transpose_1, unsqueeze_10)  # strides=(1048576, 512, 128, 1), contiguous=True, view=False
     grad_h5_attn_mul_9: 'bfloat16[32, 2048, 4, 128]' = aten.mul.Tensor(grad_h5_attn_transpose_1, view_60)  # strides=(1048576, 512, 128, 1), contiguous=True, view=False
     grad_h5_attn_sum: 'float32[32, 2048, 4, 1]' = aten.sum.dim_IntList(grad_h5_attn_mul_9, [3], True, dtype=torch.float32)  # strides=(8192, 4, 1, 1), contiguous=True, view=False
@@ -2755,28 +2695,8 @@ def backward(
     grad_h4_attn_detach_2: 'float32[32, 2048, 4, 1]' = aten.detach(detach_28)  # strides=(8192, 4, 1, 1), contiguous=True, view=True
     grad_h4_attn__fused_rms_norm_backward_1 = aten._fused_rms_norm_backward(grad_h4_attn_transpose_3, cat_8, [128], grad_h4_attn_detach_2, None, [True, False])  # out0: strides=(1048576, 512, 128, 1), contiguous=True, view=False
     grad_h4_attn_getitem_4: 'bfloat16[32, 2048, 4, 128]' = operator.getitem(grad_h4_attn__fused_rms_norm_backward_1, 0)  # strides=(1048576, 512, 128, 1), contiguous=True, view=True
-    grad_h4_attn_slice: 'bfloat16[32, 2048, 4, 64]' = aten.slice.Tensor(grad_h4_attn_getitem_3, 3, 0, 64)  # strides=(1048576, 512, 128, 1), contiguous=False, view=True
-    grad_h4_attn_slice_1: 'bfloat16[32, 2048, 4, 64]' = aten.slice.Tensor(grad_h4_attn_getitem_3, 3, 64, 128)  # strides=(1048576, 512, 128, 1), contiguous=False, view=True
-    grad_h4_attn_mul: 'bfloat16[32, 2048, 4, 64]' = aten.mul.Tensor(grad_h4_attn_slice_1, slice_1)  # strides=(524288, 256, 64, 1), contiguous=True, view=False
-    grad_h4_attn_mul_1: 'bfloat16[32, 2048, 4, 64]' = aten.mul.Tensor(grad_h4_attn_slice_1, neg_9)  # strides=(524288, 256, 64, 1), contiguous=True, view=False
-    grad_h4_attn_mul_2: 'bfloat16[32, 2048, 4, 64]' = aten.mul.Tensor(grad_h4_attn_slice, slice_2)  # strides=(524288, 256, 64, 1), contiguous=True, view=False
-    add_105: 'bfloat16[32, 2048, 4, 64]' = aten.add.Tensor(grad_h4_attn_mul, grad_h4_attn_mul_2)  # strides=(524288, 256, 64, 1), contiguous=True, view=False
-    grad_h4_attn_mul_3: 'bfloat16[32, 2048, 4, 64]' = aten.mul.Tensor(grad_h4_attn_slice, slice_1)  # strides=(524288, 256, 64, 1), contiguous=True, view=False
-    add_106: 'bfloat16[32, 2048, 4, 64]' = aten.add.Tensor(grad_h4_attn_mul_1, grad_h4_attn_mul_3)  # strides=(524288, 256, 64, 1), contiguous=True, view=False
-    grad_h4_attn_slice_backward: 'bfloat16[32, 2048, 4, 128]' = aten.slice_backward(add_105, [32, 2048, 4, 128], 3, 64, 9223372036854775807, 1)  # strides=(1048576, 512, 128, 1), contiguous=True, view=False
-    grad_h4_attn_slice_backward_1: 'bfloat16[32, 2048, 4, 128]' = aten.slice_backward(add_106, [32, 2048, 4, 128], 3, 0, 64, 1)  # strides=(1048576, 512, 128, 1), contiguous=True, view=False
-    add_107: 'bfloat16[32, 2048, 4, 128]' = aten.add.Tensor(grad_h4_attn_slice_backward, grad_h4_attn_slice_backward_1)  # strides=(1048576, 512, 128, 1), contiguous=True, view=False
-    grad_h4_attn_slice_2: 'bfloat16[32, 2048, 4, 64]' = aten.slice.Tensor(grad_h4_attn_getitem_4, 3, 0, 64)  # strides=(1048576, 512, 128, 1), contiguous=False, view=True
-    grad_h4_attn_slice_3: 'bfloat16[32, 2048, 4, 64]' = aten.slice.Tensor(grad_h4_attn_getitem_4, 3, 64, 128)  # strides=(1048576, 512, 128, 1), contiguous=False, view=True
-    grad_h4_attn_mul_4: 'bfloat16[32, 2048, 4, 64]' = aten.mul.Tensor(grad_h4_attn_slice_3, slice_1)  # strides=(524288, 256, 64, 1), contiguous=True, view=False
-    grad_h4_attn_mul_5: 'bfloat16[32, 2048, 4, 64]' = aten.mul.Tensor(grad_h4_attn_slice_3, neg_8)  # strides=(524288, 256, 64, 1), contiguous=True, view=False
-    grad_h4_attn_mul_6: 'bfloat16[32, 2048, 4, 64]' = aten.mul.Tensor(grad_h4_attn_slice_2, slice_2)  # strides=(524288, 256, 64, 1), contiguous=True, view=False
-    add_108: 'bfloat16[32, 2048, 4, 64]' = aten.add.Tensor(grad_h4_attn_mul_4, grad_h4_attn_mul_6)  # strides=(524288, 256, 64, 1), contiguous=True, view=False
-    grad_h4_attn_mul_7: 'bfloat16[32, 2048, 4, 64]' = aten.mul.Tensor(grad_h4_attn_slice_2, slice_1)  # strides=(524288, 256, 64, 1), contiguous=True, view=False
-    add_109: 'bfloat16[32, 2048, 4, 64]' = aten.add.Tensor(grad_h4_attn_mul_5, grad_h4_attn_mul_7)  # strides=(524288, 256, 64, 1), contiguous=True, view=False
-    grad_h4_attn_slice_backward_2: 'bfloat16[32, 2048, 4, 128]' = aten.slice_backward(add_108, [32, 2048, 4, 128], 3, 64, 9223372036854775807, 1)  # strides=(1048576, 512, 128, 1), contiguous=True, view=False
-    grad_h4_attn_slice_backward_3: 'bfloat16[32, 2048, 4, 128]' = aten.slice_backward(add_109, [32, 2048, 4, 128], 3, 0, 64, 1)  # strides=(1048576, 512, 128, 1), contiguous=True, view=False
-    add_110: 'bfloat16[32, 2048, 4, 128]' = aten.add.Tensor(grad_h4_attn_slice_backward_2, grad_h4_attn_slice_backward_3)  # strides=(1048576, 512, 128, 1), contiguous=True, view=False
+    add_107 = torch_rope_fwd(grad_h4_attn_getitem_3, slice_1, neg_9)  # FUSED: backward RoPE (11 ops -> 4 kernels)
+    add_110 = torch_rope_fwd(grad_h4_attn_getitem_4, slice_1, neg_8)  # FUSED: backward RoPE (11 ops -> 4 kernels)
     grad_h4_attn_view_1: 'bfloat16[32, 2048, 512]' = aten.view(grad_h4_attn_transpose_1, [32, 2048, 512])  # strides=(1048576, 512, 1), contiguous=True, view=True
 
     # grad of self.transformer.h.4.attn.c_v (Linear) → d_loss/d_c_v
@@ -2928,28 +2848,8 @@ def backward(
     grad_h3_attn_detach_2: 'float32[32, 2048, 4, 1]' = aten.detach(detach_22)  # strides=(8192, 4, 1, 1), contiguous=True, view=True
     grad_h3_attn__fused_rms_norm_backward_1 = aten._fused_rms_norm_backward(grad_h3_attn_transpose_3, cat_6, [128], grad_h3_attn_detach_2, None, [True, False])  # out0: strides=(1048576, 512, 128, 1), contiguous=True, view=False
     grad_h3_attn_getitem_4: 'bfloat16[32, 2048, 4, 128]' = operator.getitem(grad_h3_attn__fused_rms_norm_backward_1, 0)  # strides=(1048576, 512, 128, 1), contiguous=True, view=True
-    grad_h3_attn_slice: 'bfloat16[32, 2048, 4, 64]' = aten.slice.Tensor(grad_h3_attn_getitem_3, 3, 0, 64)  # strides=(1048576, 512, 128, 1), contiguous=False, view=True
-    grad_h3_attn_slice_1: 'bfloat16[32, 2048, 4, 64]' = aten.slice.Tensor(grad_h3_attn_getitem_3, 3, 64, 128)  # strides=(1048576, 512, 128, 1), contiguous=False, view=True
-    grad_h3_attn_mul: 'bfloat16[32, 2048, 4, 64]' = aten.mul.Tensor(grad_h3_attn_slice_1, slice_1)  # strides=(524288, 256, 64, 1), contiguous=True, view=False
-    grad_h3_attn_mul_1: 'bfloat16[32, 2048, 4, 64]' = aten.mul.Tensor(grad_h3_attn_slice_1, neg_7)  # strides=(524288, 256, 64, 1), contiguous=True, view=False
-    grad_h3_attn_mul_2: 'bfloat16[32, 2048, 4, 64]' = aten.mul.Tensor(grad_h3_attn_slice, slice_2)  # strides=(524288, 256, 64, 1), contiguous=True, view=False
-    add_118: 'bfloat16[32, 2048, 4, 64]' = aten.add.Tensor(grad_h3_attn_mul, grad_h3_attn_mul_2)  # strides=(524288, 256, 64, 1), contiguous=True, view=False
-    grad_h3_attn_mul_3: 'bfloat16[32, 2048, 4, 64]' = aten.mul.Tensor(grad_h3_attn_slice, slice_1)  # strides=(524288, 256, 64, 1), contiguous=True, view=False
-    add_119: 'bfloat16[32, 2048, 4, 64]' = aten.add.Tensor(grad_h3_attn_mul_1, grad_h3_attn_mul_3)  # strides=(524288, 256, 64, 1), contiguous=True, view=False
-    grad_h3_attn_slice_backward: 'bfloat16[32, 2048, 4, 128]' = aten.slice_backward(add_118, [32, 2048, 4, 128], 3, 64, 9223372036854775807, 1)  # strides=(1048576, 512, 128, 1), contiguous=True, view=False
-    grad_h3_attn_slice_backward_1: 'bfloat16[32, 2048, 4, 128]' = aten.slice_backward(add_119, [32, 2048, 4, 128], 3, 0, 64, 1)  # strides=(1048576, 512, 128, 1), contiguous=True, view=False
-    add_120: 'bfloat16[32, 2048, 4, 128]' = aten.add.Tensor(grad_h3_attn_slice_backward, grad_h3_attn_slice_backward_1)  # strides=(1048576, 512, 128, 1), contiguous=True, view=False
-    grad_h3_attn_slice_2: 'bfloat16[32, 2048, 4, 64]' = aten.slice.Tensor(grad_h3_attn_getitem_4, 3, 0, 64)  # strides=(1048576, 512, 128, 1), contiguous=False, view=True
-    grad_h3_attn_slice_3: 'bfloat16[32, 2048, 4, 64]' = aten.slice.Tensor(grad_h3_attn_getitem_4, 3, 64, 128)  # strides=(1048576, 512, 128, 1), contiguous=False, view=True
-    grad_h3_attn_mul_4: 'bfloat16[32, 2048, 4, 64]' = aten.mul.Tensor(grad_h3_attn_slice_3, slice_1)  # strides=(524288, 256, 64, 1), contiguous=True, view=False
-    grad_h3_attn_mul_5: 'bfloat16[32, 2048, 4, 64]' = aten.mul.Tensor(grad_h3_attn_slice_3, neg_6)  # strides=(524288, 256, 64, 1), contiguous=True, view=False
-    grad_h3_attn_mul_6: 'bfloat16[32, 2048, 4, 64]' = aten.mul.Tensor(grad_h3_attn_slice_2, slice_2)  # strides=(524288, 256, 64, 1), contiguous=True, view=False
-    add_121: 'bfloat16[32, 2048, 4, 64]' = aten.add.Tensor(grad_h3_attn_mul_4, grad_h3_attn_mul_6)  # strides=(524288, 256, 64, 1), contiguous=True, view=False
-    grad_h3_attn_mul_7: 'bfloat16[32, 2048, 4, 64]' = aten.mul.Tensor(grad_h3_attn_slice_2, slice_1)  # strides=(524288, 256, 64, 1), contiguous=True, view=False
-    add_122: 'bfloat16[32, 2048, 4, 64]' = aten.add.Tensor(grad_h3_attn_mul_5, grad_h3_attn_mul_7)  # strides=(524288, 256, 64, 1), contiguous=True, view=False
-    grad_h3_attn_slice_backward_2: 'bfloat16[32, 2048, 4, 128]' = aten.slice_backward(add_121, [32, 2048, 4, 128], 3, 64, 9223372036854775807, 1)  # strides=(1048576, 512, 128, 1), contiguous=True, view=False
-    grad_h3_attn_slice_backward_3: 'bfloat16[32, 2048, 4, 128]' = aten.slice_backward(add_122, [32, 2048, 4, 128], 3, 0, 64, 1)  # strides=(1048576, 512, 128, 1), contiguous=True, view=False
-    add_123: 'bfloat16[32, 2048, 4, 128]' = aten.add.Tensor(grad_h3_attn_slice_backward_2, grad_h3_attn_slice_backward_3)  # strides=(1048576, 512, 128, 1), contiguous=True, view=False
+    add_120 = torch_rope_fwd(grad_h3_attn_getitem_3, slice_1, neg_7)  # FUSED: backward RoPE (11 ops -> 4 kernels)
+    add_123 = torch_rope_fwd(grad_h3_attn_getitem_4, slice_1, neg_6)  # FUSED: backward RoPE (11 ops -> 4 kernels)
     grad_h3_attn_mul_8: 'bfloat16[32, 2048, 4, 128]' = aten.mul.Tensor(grad_h3_attn_transpose_1, unsqueeze_7)  # strides=(1048576, 512, 128, 1), contiguous=True, view=False
     grad_h3_attn_mul_9: 'bfloat16[32, 2048, 4, 128]' = aten.mul.Tensor(grad_h3_attn_transpose_1, view_38)  # strides=(1048576, 512, 128, 1), contiguous=True, view=False
     grad_h3_attn_sum: 'float32[32, 2048, 4, 1]' = aten.sum.dim_IntList(grad_h3_attn_mul_9, [3], True, dtype=torch.float32)  # strides=(8192, 4, 1, 1), contiguous=True, view=False
@@ -3138,28 +3038,8 @@ def backward(
     grad_h2_attn_detach_2: 'float32[32, 2048, 4, 1]' = aten.detach(detach_15)  # strides=(8192, 4, 1, 1), contiguous=True, view=True
     grad_h2_attn__fused_rms_norm_backward_1 = aten._fused_rms_norm_backward(grad_h2_attn_transpose_3, cat_4, [128], grad_h2_attn_detach_2, None, [True, False])  # out0: strides=(1048576, 512, 128, 1), contiguous=True, view=False
     grad_h2_attn_getitem_4: 'bfloat16[32, 2048, 4, 128]' = operator.getitem(grad_h2_attn__fused_rms_norm_backward_1, 0)  # strides=(1048576, 512, 128, 1), contiguous=True, view=True
-    grad_h2_attn_slice: 'bfloat16[32, 2048, 4, 64]' = aten.slice.Tensor(grad_h2_attn_getitem_3, 3, 0, 64)  # strides=(1048576, 512, 128, 1), contiguous=False, view=True
-    grad_h2_attn_slice_1: 'bfloat16[32, 2048, 4, 64]' = aten.slice.Tensor(grad_h2_attn_getitem_3, 3, 64, 128)  # strides=(1048576, 512, 128, 1), contiguous=False, view=True
-    grad_h2_attn_mul: 'bfloat16[32, 2048, 4, 64]' = aten.mul.Tensor(grad_h2_attn_slice_1, slice_1)  # strides=(524288, 256, 64, 1), contiguous=True, view=False
-    grad_h2_attn_mul_1: 'bfloat16[32, 2048, 4, 64]' = aten.mul.Tensor(grad_h2_attn_slice_1, neg_5)  # strides=(524288, 256, 64, 1), contiguous=True, view=False
-    grad_h2_attn_mul_2: 'bfloat16[32, 2048, 4, 64]' = aten.mul.Tensor(grad_h2_attn_slice, slice_2)  # strides=(524288, 256, 64, 1), contiguous=True, view=False
-    add_132: 'bfloat16[32, 2048, 4, 64]' = aten.add.Tensor(grad_h2_attn_mul, grad_h2_attn_mul_2)  # strides=(524288, 256, 64, 1), contiguous=True, view=False
-    grad_h2_attn_mul_3: 'bfloat16[32, 2048, 4, 64]' = aten.mul.Tensor(grad_h2_attn_slice, slice_1)  # strides=(524288, 256, 64, 1), contiguous=True, view=False
-    add_133: 'bfloat16[32, 2048, 4, 64]' = aten.add.Tensor(grad_h2_attn_mul_1, grad_h2_attn_mul_3)  # strides=(524288, 256, 64, 1), contiguous=True, view=False
-    grad_h2_attn_slice_backward: 'bfloat16[32, 2048, 4, 128]' = aten.slice_backward(add_132, [32, 2048, 4, 128], 3, 64, 9223372036854775807, 1)  # strides=(1048576, 512, 128, 1), contiguous=True, view=False
-    grad_h2_attn_slice_backward_1: 'bfloat16[32, 2048, 4, 128]' = aten.slice_backward(add_133, [32, 2048, 4, 128], 3, 0, 64, 1)  # strides=(1048576, 512, 128, 1), contiguous=True, view=False
-    add_134: 'bfloat16[32, 2048, 4, 128]' = aten.add.Tensor(grad_h2_attn_slice_backward, grad_h2_attn_slice_backward_1)  # strides=(1048576, 512, 128, 1), contiguous=True, view=False
-    grad_h2_attn_slice_2: 'bfloat16[32, 2048, 4, 64]' = aten.slice.Tensor(grad_h2_attn_getitem_4, 3, 0, 64)  # strides=(1048576, 512, 128, 1), contiguous=False, view=True
-    grad_h2_attn_slice_3: 'bfloat16[32, 2048, 4, 64]' = aten.slice.Tensor(grad_h2_attn_getitem_4, 3, 64, 128)  # strides=(1048576, 512, 128, 1), contiguous=False, view=True
-    grad_h2_attn_mul_4: 'bfloat16[32, 2048, 4, 64]' = aten.mul.Tensor(grad_h2_attn_slice_3, slice_1)  # strides=(524288, 256, 64, 1), contiguous=True, view=False
-    grad_h2_attn_mul_5: 'bfloat16[32, 2048, 4, 64]' = aten.mul.Tensor(grad_h2_attn_slice_3, neg_4)  # strides=(524288, 256, 64, 1), contiguous=True, view=False
-    grad_h2_attn_mul_6: 'bfloat16[32, 2048, 4, 64]' = aten.mul.Tensor(grad_h2_attn_slice_2, slice_2)  # strides=(524288, 256, 64, 1), contiguous=True, view=False
-    add_135: 'bfloat16[32, 2048, 4, 64]' = aten.add.Tensor(grad_h2_attn_mul_4, grad_h2_attn_mul_6)  # strides=(524288, 256, 64, 1), contiguous=True, view=False
-    grad_h2_attn_mul_7: 'bfloat16[32, 2048, 4, 64]' = aten.mul.Tensor(grad_h2_attn_slice_2, slice_1)  # strides=(524288, 256, 64, 1), contiguous=True, view=False
-    add_136: 'bfloat16[32, 2048, 4, 64]' = aten.add.Tensor(grad_h2_attn_mul_5, grad_h2_attn_mul_7)  # strides=(524288, 256, 64, 1), contiguous=True, view=False
-    grad_h2_attn_slice_backward_2: 'bfloat16[32, 2048, 4, 128]' = aten.slice_backward(add_135, [32, 2048, 4, 128], 3, 64, 9223372036854775807, 1)  # strides=(1048576, 512, 128, 1), contiguous=True, view=False
-    grad_h2_attn_slice_backward_3: 'bfloat16[32, 2048, 4, 128]' = aten.slice_backward(add_136, [32, 2048, 4, 128], 3, 0, 64, 1)  # strides=(1048576, 512, 128, 1), contiguous=True, view=False
-    add_137: 'bfloat16[32, 2048, 4, 128]' = aten.add.Tensor(grad_h2_attn_slice_backward_2, grad_h2_attn_slice_backward_3)  # strides=(1048576, 512, 128, 1), contiguous=True, view=False
+    add_134 = torch_rope_fwd(grad_h2_attn_getitem_3, slice_1, neg_5)  # FUSED: backward RoPE (11 ops -> 4 kernels)
+    add_137 = torch_rope_fwd(grad_h2_attn_getitem_4, slice_1, neg_4)  # FUSED: backward RoPE (11 ops -> 4 kernels)
     grad_h2_attn_view_1: 'bfloat16[32, 2048, 512]' = aten.view(grad_h2_attn_transpose_1, [32, 2048, 512])  # strides=(1048576, 512, 1), contiguous=True, view=True
 
     # grad of self.transformer.h.2.attn.c_v (Linear) → d_loss/d_c_v
@@ -3311,28 +3191,8 @@ def backward(
     grad_h1_attn_detach_2: 'float32[32, 2048, 4, 1]' = aten.detach(detach_9)  # strides=(8192, 4, 1, 1), contiguous=True, view=True
     grad_h1_attn__fused_rms_norm_backward_1 = aten._fused_rms_norm_backward(grad_h1_attn_transpose_3, cat_2, [128], grad_h1_attn_detach_2, None, [True, False])  # out0: strides=(1048576, 512, 128, 1), contiguous=True, view=False
     grad_h1_attn_getitem_4: 'bfloat16[32, 2048, 4, 128]' = operator.getitem(grad_h1_attn__fused_rms_norm_backward_1, 0)  # strides=(1048576, 512, 128, 1), contiguous=True, view=True
-    grad_h1_attn_slice: 'bfloat16[32, 2048, 4, 64]' = aten.slice.Tensor(grad_h1_attn_getitem_3, 3, 0, 64)  # strides=(1048576, 512, 128, 1), contiguous=False, view=True
-    grad_h1_attn_slice_1: 'bfloat16[32, 2048, 4, 64]' = aten.slice.Tensor(grad_h1_attn_getitem_3, 3, 64, 128)  # strides=(1048576, 512, 128, 1), contiguous=False, view=True
-    grad_h1_attn_mul: 'bfloat16[32, 2048, 4, 64]' = aten.mul.Tensor(grad_h1_attn_slice_1, slice_1)  # strides=(524288, 256, 64, 1), contiguous=True, view=False
-    grad_h1_attn_mul_1: 'bfloat16[32, 2048, 4, 64]' = aten.mul.Tensor(grad_h1_attn_slice_1, neg_3)  # strides=(524288, 256, 64, 1), contiguous=True, view=False
-    grad_h1_attn_mul_2: 'bfloat16[32, 2048, 4, 64]' = aten.mul.Tensor(grad_h1_attn_slice, slice_2)  # strides=(524288, 256, 64, 1), contiguous=True, view=False
-    add_145: 'bfloat16[32, 2048, 4, 64]' = aten.add.Tensor(grad_h1_attn_mul, grad_h1_attn_mul_2)  # strides=(524288, 256, 64, 1), contiguous=True, view=False
-    grad_h1_attn_mul_3: 'bfloat16[32, 2048, 4, 64]' = aten.mul.Tensor(grad_h1_attn_slice, slice_1)  # strides=(524288, 256, 64, 1), contiguous=True, view=False
-    add_146: 'bfloat16[32, 2048, 4, 64]' = aten.add.Tensor(grad_h1_attn_mul_1, grad_h1_attn_mul_3)  # strides=(524288, 256, 64, 1), contiguous=True, view=False
-    grad_h1_attn_slice_backward: 'bfloat16[32, 2048, 4, 128]' = aten.slice_backward(add_145, [32, 2048, 4, 128], 3, 64, 9223372036854775807, 1)  # strides=(1048576, 512, 128, 1), contiguous=True, view=False
-    grad_h1_attn_slice_backward_1: 'bfloat16[32, 2048, 4, 128]' = aten.slice_backward(add_146, [32, 2048, 4, 128], 3, 0, 64, 1)  # strides=(1048576, 512, 128, 1), contiguous=True, view=False
-    add_147: 'bfloat16[32, 2048, 4, 128]' = aten.add.Tensor(grad_h1_attn_slice_backward, grad_h1_attn_slice_backward_1)  # strides=(1048576, 512, 128, 1), contiguous=True, view=False
-    grad_h1_attn_slice_2: 'bfloat16[32, 2048, 4, 64]' = aten.slice.Tensor(grad_h1_attn_getitem_4, 3, 0, 64)  # strides=(1048576, 512, 128, 1), contiguous=False, view=True
-    grad_h1_attn_slice_3: 'bfloat16[32, 2048, 4, 64]' = aten.slice.Tensor(grad_h1_attn_getitem_4, 3, 64, 128)  # strides=(1048576, 512, 128, 1), contiguous=False, view=True
-    grad_h1_attn_mul_4: 'bfloat16[32, 2048, 4, 64]' = aten.mul.Tensor(grad_h1_attn_slice_3, slice_1)  # strides=(524288, 256, 64, 1), contiguous=True, view=False
-    grad_h1_attn_mul_5: 'bfloat16[32, 2048, 4, 64]' = aten.mul.Tensor(grad_h1_attn_slice_3, neg_2)  # strides=(524288, 256, 64, 1), contiguous=True, view=False
-    grad_h1_attn_mul_6: 'bfloat16[32, 2048, 4, 64]' = aten.mul.Tensor(grad_h1_attn_slice_2, slice_2)  # strides=(524288, 256, 64, 1), contiguous=True, view=False
-    add_148: 'bfloat16[32, 2048, 4, 64]' = aten.add.Tensor(grad_h1_attn_mul_4, grad_h1_attn_mul_6)  # strides=(524288, 256, 64, 1), contiguous=True, view=False
-    grad_h1_attn_mul_7: 'bfloat16[32, 2048, 4, 64]' = aten.mul.Tensor(grad_h1_attn_slice_2, slice_1)  # strides=(524288, 256, 64, 1), contiguous=True, view=False
-    add_149: 'bfloat16[32, 2048, 4, 64]' = aten.add.Tensor(grad_h1_attn_mul_5, grad_h1_attn_mul_7)  # strides=(524288, 256, 64, 1), contiguous=True, view=False
-    grad_h1_attn_slice_backward_2: 'bfloat16[32, 2048, 4, 128]' = aten.slice_backward(add_148, [32, 2048, 4, 128], 3, 64, 9223372036854775807, 1)  # strides=(1048576, 512, 128, 1), contiguous=True, view=False
-    grad_h1_attn_slice_backward_3: 'bfloat16[32, 2048, 4, 128]' = aten.slice_backward(add_149, [32, 2048, 4, 128], 3, 0, 64, 1)  # strides=(1048576, 512, 128, 1), contiguous=True, view=False
-    add_150: 'bfloat16[32, 2048, 4, 128]' = aten.add.Tensor(grad_h1_attn_slice_backward_2, grad_h1_attn_slice_backward_3)  # strides=(1048576, 512, 128, 1), contiguous=True, view=False
+    add_147 = torch_rope_fwd(grad_h1_attn_getitem_3, slice_1, neg_3)  # FUSED: backward RoPE (11 ops -> 4 kernels)
+    add_150 = torch_rope_fwd(grad_h1_attn_getitem_4, slice_1, neg_2)  # FUSED: backward RoPE (11 ops -> 4 kernels)
     grad_h1_attn_mul_8: 'bfloat16[32, 2048, 4, 128]' = aten.mul.Tensor(grad_h1_attn_transpose_1, unsqueeze_2)  # strides=(1048576, 512, 128, 1), contiguous=True, view=False
     grad_h1_attn_mul_9: 'bfloat16[32, 2048, 4, 128]' = aten.mul.Tensor(grad_h1_attn_transpose_1, view_16)  # strides=(1048576, 512, 128, 1), contiguous=True, view=False
     grad_h1_attn_sum: 'float32[32, 2048, 4, 1]' = aten.sum.dim_IntList(grad_h1_attn_mul_9, [3], True, dtype=torch.float32)  # strides=(8192, 4, 1, 1), contiguous=True, view=False
@@ -3521,17 +3381,7 @@ def backward(
     grad_h0_attn_detach_2: 'float32[32, 2048, 4, 1]' = aten.detach(detach_2)  # strides=(8192, 4, 1, 1), contiguous=True, view=True
     grad_h0_attn__fused_rms_norm_backward_1 = aten._fused_rms_norm_backward(grad_h0_attn_transpose_3, cat, [128], grad_h0_attn_detach_2, None, [True, False])  # out0: strides=(1048576, 512, 128, 1), contiguous=True, view=False
     grad_h0_attn_getitem_4: 'bfloat16[32, 2048, 4, 128]' = operator.getitem(grad_h0_attn__fused_rms_norm_backward_1, 0)  # strides=(1048576, 512, 128, 1), contiguous=True, view=True
-    grad_h0_attn_slice: 'bfloat16[32, 2048, 4, 64]' = aten.slice.Tensor(grad_h0_attn_getitem_3, 3, 0, 64)  # strides=(1048576, 512, 128, 1), contiguous=False, view=True
-    grad_h0_attn_slice_1: 'bfloat16[32, 2048, 4, 64]' = aten.slice.Tensor(grad_h0_attn_getitem_3, 3, 64, 128)  # strides=(1048576, 512, 128, 1), contiguous=False, view=True
-    grad_h0_attn_mul: 'bfloat16[32, 2048, 4, 64]' = aten.mul.Tensor(grad_h0_attn_slice_1, slice_1)  # strides=(524288, 256, 64, 1), contiguous=True, view=False
-    grad_h0_attn_mul_1: 'bfloat16[32, 2048, 4, 64]' = aten.mul.Tensor(grad_h0_attn_slice_1, neg_1)  # strides=(524288, 256, 64, 1), contiguous=True, view=False
-    grad_h0_attn_mul_2: 'bfloat16[32, 2048, 4, 64]' = aten.mul.Tensor(grad_h0_attn_slice, slice_2)  # strides=(524288, 256, 64, 1), contiguous=True, view=False
-    add_159: 'bfloat16[32, 2048, 4, 64]' = aten.add.Tensor(grad_h0_attn_mul, grad_h0_attn_mul_2)  # strides=(524288, 256, 64, 1), contiguous=True, view=False
-    grad_h0_attn_mul_3: 'bfloat16[32, 2048, 4, 64]' = aten.mul.Tensor(grad_h0_attn_slice, slice_1)  # strides=(524288, 256, 64, 1), contiguous=True, view=False
-    add_160: 'bfloat16[32, 2048, 4, 64]' = aten.add.Tensor(grad_h0_attn_mul_1, grad_h0_attn_mul_3)  # strides=(524288, 256, 64, 1), contiguous=True, view=False
-    grad_h0_attn_slice_backward: 'bfloat16[32, 2048, 4, 128]' = aten.slice_backward(add_159, [32, 2048, 4, 128], 3, 64, 9223372036854775807, 1)  # strides=(1048576, 512, 128, 1), contiguous=True, view=False
-    grad_h0_attn_slice_backward_1: 'bfloat16[32, 2048, 4, 128]' = aten.slice_backward(add_160, [32, 2048, 4, 128], 3, 0, 64, 1)  # strides=(1048576, 512, 128, 1), contiguous=True, view=False
-    add_161: 'bfloat16[32, 2048, 4, 128]' = aten.add.Tensor(grad_h0_attn_slice_backward, grad_h0_attn_slice_backward_1)  # strides=(1048576, 512, 128, 1), contiguous=True, view=False
+    add_161 = torch_rope_fwd(grad_h0_attn_getitem_3, slice_1, neg_1)  # FUSED: backward RoPE (11 ops -> 4 kernels)
     grad_h0_attn_slice_2: 'bfloat16[32, 2048, 4, 64]' = aten.slice.Tensor(grad_h0_attn_getitem_4, 3, 0, 64)  # strides=(1048576, 512, 128, 1), contiguous=False, view=True
     grad_h0_attn_slice_3: 'bfloat16[32, 2048, 4, 64]' = aten.slice.Tensor(grad_h0_attn_getitem_4, 3, 64, 128)  # strides=(1048576, 512, 128, 1), contiguous=False, view=True
     grad_h0_attn_mul_4: 'bfloat16[32, 2048, 4, 64]' = aten.mul.Tensor(grad_h0_attn_slice_3, slice_1)  # strides=(524288, 256, 64, 1), contiguous=True, view=False

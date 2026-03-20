@@ -1,6 +1,7 @@
-"""Isolated kernel_mode planning via a one-shot subprocess and socket IPC."""
+"""Isolated kernel_mode planning via a pre-fork daemon with subprocess fallback."""
 from __future__ import annotations
 
+import atexit
 import argparse
 import base64
 import importlib.util
@@ -9,11 +10,13 @@ import json
 import os
 from pathlib import Path
 import shutil
+import signal
 import socket
 import struct
 import subprocess
 import sys
 import tempfile
+import time
 import traceback
 from typing import Any
 
@@ -331,9 +334,314 @@ def _planner_script_path():
     raise FileNotFoundError("kbox_isolated_kernel_mode.py not found")
 
 
+def _planner_env():
+    """Environment variables for the isolated planner subprocess (no GPU)."""
+    env = {
+        "PATH": os.environ.get("PATH", ""),
+        "PYTHONUNBUFFERED": "1",
+        "PYTHONNOUSERSITE": "1" if os.environ.get("VIRTUAL_ENV") else "",
+        "CUDA_VISIBLE_DEVICES": "",
+        "NVIDIA_VISIBLE_DEVICES": "void",
+        "HIP_VISIBLE_DEVICES": "",
+        "ROCR_VISIBLE_DEVICES": "",
+        "HSA_VISIBLE_DEVICES": "",
+        "HOME": os.environ.get("HOME", "/tmp"),
+        "TMPDIR": os.environ.get("TMPDIR", "/tmp"),
+    }
+    for key in ("LD_LIBRARY_PATH", "DYLD_LIBRARY_PATH", "PYTHONHOME", "PYTHONPATH"):
+        value = os.environ.get(key)
+        if value:
+            env[key] = value
+    return env
+
+
+# ---------------------------------------------------------------------------
+# Shared request execution (used by both one-shot and fork-based paths)
+# ---------------------------------------------------------------------------
+
+def _execute_kernel_mode_request(request):
+    """Load and execute a kernel_mode function from a request dict.
+
+    Returns a reply dict with ``ok`` and ``steps`` (or ``error``).
+    The caller is responsible for loading the kernel_mode file path into
+    ``request["kernel_mode_path"]`` before calling this function.
+    """
+    kernel_mode_path = request["kernel_mode_path"]
+    kernel_mode_fn = _load_kernel_mode(kernel_mode_path)
+
+    scratch_ptr = _IsolatedWorkerPtr(
+        request["scratch_ptr"]["value"],
+        kind=request["scratch_ptr"]["kind"],
+        index=request["scratch_ptr"].get("index"),
+        offset=request["scratch_ptr"].get("offset", 0),
+    )
+    input_ptrs = [
+        _IsolatedWorkerPtr(ptr["value"], kind=ptr["kind"],
+                           index=ptr.get("index"),
+                           offset=ptr.get("offset", 0))
+        for ptr in request["input_ptrs"]
+    ]
+    output_ptrs = [
+        _IsolatedWorkerPtr(ptr["value"], kind=ptr["kind"],
+                           index=ptr.get("index"),
+                           offset=ptr.get("offset", 0))
+        for ptr in request["output_ptrs"]
+    ]
+    kernels = [
+        _IsolatedKernelHandle(desc, input_ptrs, output_ptrs, scratch_ptr)
+        for desc in request["kernels"]
+    ]
+
+    kwargs = {}
+    sig = inspect.signature(kernel_mode_fn)
+    for name, param in sig.parameters.items():
+        if name == "kernel":
+            kwargs[name] = kernels if len(kernels) > 1 else kernels[0]
+        elif name == "kernels":
+            kwargs[name] = kernels
+        elif name == "scratch_ptr":
+            kwargs[name] = scratch_ptr
+        elif name == "input_ptrs":
+            kwargs[name] = input_ptrs
+        elif name == "output_ptrs":
+            kwargs[name] = output_ptrs
+        elif name in ("input_meta", "inputs_meta"):
+            kwargs[name] = request["inputs_meta"]
+        elif name in ("output_meta", "outputs_meta"):
+            kwargs[name] = request["outputs_meta"]
+        elif name == "n":
+            kwargs[name] = request["n"]
+        elif (param.kind not in (inspect.Parameter.VAR_POSITIONAL,
+                                 inspect.Parameter.VAR_KEYWORD)
+                and param.default is inspect.Parameter.empty):
+            raise IsolatedKernelModeError(
+                f"Unsupported kernel_mode() parameter: {name}")
+
+    steps = kernel_mode_fn(**kwargs)
+    if not isinstance(steps, (list, tuple)):
+        raise IsolatedKernelModeError(
+            "kernel_mode() must return a list/tuple of step specs")
+
+    return {"ok": True, "steps": [_serialize_step(step) for step in steps]}
+
+
+# ---------------------------------------------------------------------------
+# Pre-fork planner daemon
+# ---------------------------------------------------------------------------
+
+def _prune_kernelbox_imports_all():
+    """Remove all kernelbox paths from sys.path and sys.modules."""
+    kernelbox_root = str(Path(__file__).resolve().parents[1])
+    sys.path[:] = [
+        entry for entry in sys.path
+        if not (os.path.abspath(entry or os.getcwd()) == kernelbox_root
+                or os.path.abspath(entry or os.getcwd()).startswith(
+                    kernelbox_root + os.sep))
+    ]
+    for name in list(sys.modules):
+        if name == "kernelbox" or name.startswith("kernelbox."):
+            sys.modules.pop(name, None)
+
+
+def _planner_fork_child(conn, saved_sys_path):
+    """Handle a single planning request in a forked child process.
+
+    Restores sys.path from the pre-prune snapshot so that user code (e.g.
+    task wrappers) can import kernelbox task definitions.  Isolation is
+    provided by the fork boundary + no-GPU env vars, not by path pruning.
+    """
+    sys.path[:] = saved_sys_path
+    conn.settimeout(30.0)
+    try:
+        request = _recv_json(conn)
+        reply = _execute_kernel_mode_request(request)
+        _send_json(conn, reply)
+    except Exception as exc:
+        detail = f"{exc}\n{traceback.format_exc()}"
+        try:
+            _send_json(conn, {"ok": False, "error": detail})
+        except Exception:
+            pass
+    finally:
+        conn.close()
+
+
+def _planner_daemon_main(sock_path, idle_timeout=300.0):
+    """Pre-fork planner daemon: accepts requests and forks a child for each.
+
+    The daemon process imports numpy/torch once at startup, prunes kernelbox
+    from sys.path/sys.modules, then enters an accept/fork loop. Each forked
+    child inherits the warm interpreter (via COW) but runs in its own process
+    space, so one kernel_mode invocation cannot contaminate another.
+    """
+    # Auto-reap children so we don't accumulate zombies.
+    signal.signal(signal.SIGCHLD, signal.SIG_IGN)
+
+    # Snapshot sys.path before pruning — fork children restore it so that
+    # user code (e.g. task wrappers importing kernelbox.task_defs) works.
+    # Isolation is provided by fork + no-GPU env vars, not path pruning.
+    saved_sys_path = list(sys.path)
+
+    # Prune kernelbox from the daemon parent so it stays clean.
+    _prune_kernelbox_imports_all()
+
+    server = socket.socket(socket.AF_UNIX, socket.SOCK_STREAM)
+    try:
+        server.bind(sock_path)
+        server.listen(4)
+
+        while True:
+            server.settimeout(idle_timeout)
+            try:
+                conn, _ = server.accept()
+            except socket.timeout:
+                break  # idle timeout → exit cleanly
+
+            pid = os.fork()
+            if pid == 0:
+                # Child: handle request, then exit.
+                server.close()
+                try:
+                    _planner_fork_child(conn, saved_sys_path)
+                except Exception:
+                    pass
+                os._exit(0)
+            else:
+                # Parent: close our copy of the connection, loop back.
+                conn.close()
+    finally:
+        server.close()
+        try:
+            os.unlink(sock_path)
+        except OSError:
+            pass
+    return 0
+
+
+class _PlannerDaemon:
+    """Manages a persistent pre-fork planner daemon subprocess."""
+
+    def __init__(self):
+        self._proc = None
+        self._sock_dir = None
+        self._sock_path = None
+
+    def _spawn(self):
+        self._sock_dir = tempfile.mkdtemp(prefix="kbox_planner_")
+        self._sock_path = os.path.join(self._sock_dir, "planner.sock")
+        cmd = [
+            sys.executable,
+            str(_planner_script_path()),
+            "--sock", self._sock_path,
+            "--daemon",
+        ]
+        self._proc = subprocess.Popen(
+            cmd,
+            stdin=subprocess.DEVNULL,
+            stdout=subprocess.DEVNULL,
+            stderr=subprocess.PIPE,
+            close_fds=True,
+            start_new_session=True,
+            env=_planner_env(),
+        )
+        # Wait for the daemon to create its socket.
+        deadline = time.monotonic() + 10.0
+        while time.monotonic() < deadline:
+            if os.path.exists(self._sock_path):
+                return
+            if self._proc.poll() is not None:
+                stderr = self._proc.stderr.read() if self._proc.stderr else ""
+                raise IsolatedKernelModeError(
+                    f"planner daemon exited during startup "
+                    f"(rc={self._proc.returncode})\n{stderr}")
+            time.sleep(0.05)
+        self._proc.kill()
+        self._proc.communicate()
+        raise IsolatedKernelModeError(
+            "planner daemon did not create socket within 10s")
+
+    def is_alive(self):
+        return self._proc is not None and self._proc.poll() is None
+
+    def request(self, context, timeout=10.0):
+        """Send a planning request to the daemon and return the reply dict."""
+        for attempt in range(2):
+            if not self.is_alive():
+                self.shutdown()
+                self._spawn()
+            try:
+                sock = socket.socket(socket.AF_UNIX, socket.SOCK_STREAM)
+                sock.settimeout(timeout)
+                try:
+                    sock.connect(self._sock_path)
+                    _send_json(sock, context)
+                    return _recv_json(sock)
+                finally:
+                    sock.close()
+            except (ConnectionRefusedError, BrokenPipeError,
+                    FileNotFoundError, socket.timeout,
+                    IsolatedKernelModeError):
+                if attempt == 0:
+                    self.shutdown()
+                    continue
+                raise
+        raise IsolatedKernelModeError("planner daemon failed after retry")
+
+    def shutdown(self):
+        if self._proc is not None:
+            try:
+                self._proc.kill()
+                self._proc.wait(timeout=5)
+            except Exception:
+                pass
+            self._proc = None
+        if self._sock_path is not None:
+            try:
+                os.unlink(self._sock_path)
+            except OSError:
+                pass
+        if self._sock_dir is not None:
+            try:
+                shutil.rmtree(self._sock_dir, ignore_errors=True)
+            except Exception:
+                pass
+            self._sock_dir = None
+            self._sock_path = None
+
+
+_planner_daemon: _PlannerDaemon | None = None
+_atexit_registered = False
+
+
+def _cleanup_planner_daemon():
+    global _planner_daemon
+    if _planner_daemon is not None:
+        _planner_daemon.shutdown()
+        _planner_daemon = None
+
+
+def _get_planner_daemon():
+    """Return a running planner daemon, spawning one if needed."""
+    global _planner_daemon, _atexit_registered
+    if not _atexit_registered:
+        atexit.register(_cleanup_planner_daemon)
+        _atexit_registered = True
+    if _planner_daemon is not None and _planner_daemon.is_alive():
+        return _planner_daemon
+    if _planner_daemon is not None:
+        _planner_daemon.shutdown()
+    _planner_daemon = _PlannerDaemon()
+    _planner_daemon._spawn()
+    return _planner_daemon
+
+
+# ---------------------------------------------------------------------------
+# Public API
+# ---------------------------------------------------------------------------
+
 def build_isolated_kernel_mode_plan(session, kernel_mode_path, run_inputs,
                                     out_dtype=None, timeout=10.0):
-    """Build a kernel_mode launch plan in a one-shot isolated subprocess."""
+    """Build a kernel_mode launch plan via the persistent pre-fork planner daemon."""
     norm_inputs, out_specs, n, _, _, _, _ = \
         session._resolve_inputs_and_outputs(run_inputs, out_dtype=out_dtype)
     session._ensure_persistent_layout(
@@ -342,6 +650,7 @@ def build_isolated_kernel_mode_plan(session, kernel_mode_path, run_inputs,
     inputs_meta, outputs_meta = tensor_metadata(norm_inputs, out_specs)
 
     context = {
+        "kernel_mode_path": os.path.abspath(kernel_mode_path),
         "kernels": _kernel_descriptors(session),
         "scratch_ptr": _serialize_ptr(session.scratch_ptr),
         "input_ptrs": [_serialize_ptr(ptr) for ptr in session.input_ptrs],
@@ -351,103 +660,19 @@ def build_isolated_kernel_mode_plan(session, kernel_mode_path, run_inputs,
         "n": n,
     }
 
-    with tempfile.TemporaryDirectory(prefix="kbox_isolated_") as tmpdir:
-        sock_path = os.path.join(tmpdir, "planner.sock")
-        server = socket.socket(socket.AF_UNIX, socket.SOCK_STREAM)
-        server.bind(sock_path)
-        server.listen(1)
-        server.settimeout(timeout)
+    daemon = _get_planner_daemon()
+    reply = daemon.request(context, timeout=timeout)
 
-        cmd = [
-            sys.executable,
-            str(_planner_script_path()),
-            "--sock",
-            sock_path,
-            "--kernel-mode",
-            os.path.abspath(kernel_mode_path),
-        ]
-        env = {
-            "PATH": os.environ.get("PATH", ""),
-            "PYTHONUNBUFFERED": "1",
-            "PYTHONNOUSERSITE": "1" if os.environ.get("VIRTUAL_ENV") else "",
-            "CUDA_VISIBLE_DEVICES": "",
-            "NVIDIA_VISIBLE_DEVICES": "void",
-            "HIP_VISIBLE_DEVICES": "",
-            "ROCR_VISIBLE_DEVICES": "",
-            "HSA_VISIBLE_DEVICES": "",
-            "HOME": os.environ.get("HOME", tmpdir),
-            "TMPDIR": tmpdir,
-        }
-        for key in ("LD_LIBRARY_PATH", "DYLD_LIBRARY_PATH", "PYTHONHOME", "PYTHONPATH"):
-            value = os.environ.get(key)
-            if value:
-                env[key] = value
-        proc = subprocess.Popen(
-            cmd,
-            stdin=subprocess.DEVNULL,
-            stdout=subprocess.DEVNULL,
-            stderr=subprocess.PIPE,
-            close_fds=True,
-            start_new_session=True,
-            env=env,
-            cwd=tmpdir,
-            text=True,
-        )
-        try:
-            try:
-                conn, _ = server.accept()
-            except socket.timeout as exc:
-                proc.kill()
-                stderr = proc.communicate()[1] or ""
-                detail = stderr.strip()
-                if detail:
-                    detail = f"\n{detail}"
-                raise IsolatedKernelModeError(
-                    f"isolated planner timed out before connecting{detail}"
-                ) from exc
-
-            with conn:
-                conn.settimeout(timeout)
-                _send_json(conn, context)
-                try:
-                    reply = _recv_json(conn)
-                except socket.timeout as exc:
-                    proc.kill()
-                    stderr = proc.communicate()[1] or ""
-                    detail = stderr.strip()
-                    if detail:
-                        detail = f"\n{detail}"
-                    raise IsolatedKernelModeError(
-                        f"isolated planner timed out waiting for a reply{detail}"
-                    ) from exc
-
-            try:
-                stderr = proc.communicate(timeout=timeout)[1] or ""
-            except subprocess.TimeoutExpired as exc:
-                proc.kill()
-                stderr = proc.communicate()[1] or ""
-                detail = stderr.strip()
-                if detail:
-                    detail = f"\n{detail}"
-                raise IsolatedKernelModeError(
-                    f"isolated planner did not exit cleanly{detail}"
-                ) from exc
-        except Exception:
-            if proc.poll() is None:
-                proc.kill()
-                proc.communicate()
-            raise
-        finally:
-            server.close()
-
-    if proc.returncode != 0:
-        raise IsolatedKernelModeError(
-            f"isolated planner failed (rc={proc.returncode})\n{stderr.strip()}")
     if reply.get("ok") is not True:
-        raise IsolatedKernelModeError(reply.get("error", "isolated planner failed"))
+        raise IsolatedKernelModeError(
+            reply.get("error", "isolated planner failed"))
     steps = [_deserialize_step(step, session) for step in reply["steps"]]
     return norm_inputs, out_specs, n, steps
 
+
+# ---------------------------------------------------------------------------
+# One-shot subprocess path (backward compat, used by --kernel-mode CLI)
+# ---------------------------------------------------------------------------
 
 def _load_kernel_mode(path):
     path = os.path.abspath(path)
@@ -487,65 +712,9 @@ def isolated_planner_main(sock_path, kernel_mode_path):
         sock.connect(sock_path)
         request = _recv_json(sock)
         _prune_kernelbox_imports(kernel_mode_path)
-        kernel_mode_fn = _load_kernel_mode(kernel_mode_path)
-
-        scratch_ptr = _IsolatedWorkerPtr(
-            request["scratch_ptr"]["value"],
-            kind=request["scratch_ptr"]["kind"],
-            index=request["scratch_ptr"].get("index"),
-            offset=request["scratch_ptr"].get("offset", 0),
-        )
-        input_ptrs = [
-            _IsolatedWorkerPtr(ptr["value"], kind=ptr["kind"],
-                               index=ptr.get("index"),
-                               offset=ptr.get("offset", 0))
-            for ptr in request["input_ptrs"]
-        ]
-        output_ptrs = [
-            _IsolatedWorkerPtr(ptr["value"], kind=ptr["kind"],
-                               index=ptr.get("index"),
-                               offset=ptr.get("offset", 0))
-            for ptr in request["output_ptrs"]
-        ]
-        kernels = [
-            _IsolatedKernelHandle(desc, input_ptrs, output_ptrs, scratch_ptr)
-            for desc in request["kernels"]
-        ]
-
-        kwargs = {}
-        sig = inspect.signature(kernel_mode_fn)
-        for name, param in sig.parameters.items():
-            if name == "kernel":
-                kwargs[name] = kernels if len(kernels) > 1 else kernels[0]
-            elif name == "kernels":
-                kwargs[name] = kernels
-            elif name == "scratch_ptr":
-                kwargs[name] = scratch_ptr
-            elif name == "input_ptrs":
-                kwargs[name] = input_ptrs
-            elif name == "output_ptrs":
-                kwargs[name] = output_ptrs
-            elif name in ("input_meta", "inputs_meta"):
-                kwargs[name] = request["inputs_meta"]
-            elif name in ("output_meta", "outputs_meta"):
-                kwargs[name] = request["outputs_meta"]
-            elif name == "n":
-                kwargs[name] = request["n"]
-            elif (param.kind not in (inspect.Parameter.VAR_POSITIONAL,
-                                     inspect.Parameter.VAR_KEYWORD)
-                    and param.default is inspect.Parameter.empty):
-                raise IsolatedKernelModeError(
-                    f"Unsupported kernel_mode() parameter: {name}")
-
-        steps = kernel_mode_fn(**kwargs)
-        if not isinstance(steps, (list, tuple)):
-            raise IsolatedKernelModeError(
-                "kernel_mode() must return a list/tuple of step specs")
-
-        _send_json(sock, {
-            "ok": True,
-            "steps": [_serialize_step(step) for step in steps],
-        })
+        request["kernel_mode_path"] = kernel_mode_path
+        reply = _execute_kernel_mode_request(request)
+        _send_json(sock, reply)
         return 0
     except Exception as exc:
         detail = f"{exc}\n{traceback.format_exc()}"
@@ -559,11 +728,22 @@ def isolated_planner_main(sock_path, kernel_mode_path):
         sock.close()
 
 
+# ---------------------------------------------------------------------------
+# CLI entry point
+# ---------------------------------------------------------------------------
+
 def main(argv=None):
     parser = argparse.ArgumentParser()
     parser.add_argument("--sock", required=True)
-    parser.add_argument("--kernel-mode", required=True)
+    group = parser.add_mutually_exclusive_group(required=True)
+    group.add_argument("--kernel-mode", help="One-shot mode: plan for a single file")
+    group.add_argument("--daemon", action="store_true",
+                       help="Daemon mode: accept requests in a fork loop")
+    parser.add_argument("--idle-timeout", type=float, default=300.0,
+                        help="Daemon idle timeout in seconds (default: 300)")
     args = parser.parse_args(argv)
+    if args.daemon:
+        raise SystemExit(_planner_daemon_main(args.sock, args.idle_timeout))
     raise SystemExit(isolated_planner_main(args.sock, args.kernel_mode))
 
 

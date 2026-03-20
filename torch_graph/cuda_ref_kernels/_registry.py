@@ -2008,9 +2008,14 @@ for _name, _cfg in _FILE_OPS.items():
         _state_fn = lambda n=_name: _file_state(n)[1]
         _reg(_name, kernel=_ksrc, inputs=_cfg["inputs"], dims=_cfg["dims"],
              aten=_cfg["aten"], dispatch=_dispatch, atol=_cfg.get("atol", 1e-5),
-             outputs=lambda d, n=_name: _file_state(n)[1].get("outputs"),
-             grid=lambda d, n=_name: _file_state(n)[1].get("grid"),
-             block=None)
+             outputs=None, grid=None, block=None)
+        # Patch outputs/grid from the generated file's init_once
+        try:
+            _ksrc2, _state = _file_state(_name)
+            if _state.get("outputs"): OPS[_name]["outputs"] = lambda d, _o=_state["outputs"]: _o
+            if _state.get("grid"): OPS[_name]["grid"] = lambda d, _g=_state["grid"]: _g
+            if _state.get("block"): OPS[_name]["block"] = _state["block"]
+        except: pass
     except Exception as e:
         pass  # file may not exist yet after regeneration
 

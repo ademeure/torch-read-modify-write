@@ -23,3 +23,5 @@ outputs/
 .tmp_review_cache/
 *_aten.meta
 .setup_stamp
+.autoresearch_repo_sdpa/
+*.baseline

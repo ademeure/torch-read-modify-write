@@ -30,7 +30,7 @@ def init_once():
     total = x.numel()
     return {"kernel_source": KERNEL_SRC, "inputs": [grad, x.detach(), mean, rstd, w],
             "expected": [result[0].flatten()],
-            "outputs": ["float32;n=%d" % total], "grid": ((total + 255) // 256,), "atol": 2.0}
+            "outputs": ["float32;n=%d" % total], "grid": ((total + 255) // 256,), "atol": 1e-2}
 
 def run(inputs, kernel):
     total = inputs[0].numel()

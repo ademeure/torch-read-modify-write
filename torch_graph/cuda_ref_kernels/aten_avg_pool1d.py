@@ -19,7 +19,7 @@ extern "C" __global__ void aten_avg_pool1d(
         int il = (int)(ol * stride + k) - (int)pad;
         if (il >= 0 && il < (int)L) { sum += input[n*C*L + c*L + il]; count++; }
     }
-    output[idx] = sum / (float)kL;
+    output[idx] = sum / (float)count;
 }
 """
 

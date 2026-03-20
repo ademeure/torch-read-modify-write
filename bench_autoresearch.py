@@ -25,6 +25,9 @@ from pathlib import Path
 
 _root = Path(__file__).resolve().parent
 sys.path.insert(0, str(_root))
+# autoresearch repo (sdpa-blackwell-compat branch)
+_ar_root = _root / ".autoresearch_repo"
+sys.path.insert(0, str(_ar_root))
 os.environ.setdefault("HF_HUB_DISABLE_PROGRESS_BARS", "1")
 os.environ["PYTORCH_ALLOC_CONF"] = "expandable_segments:True"
 os.environ.setdefault(
@@ -32,6 +35,26 @@ os.environ.setdefault(
     "/usr/local/cuda-13.1/targets/x86_64-linux/lib/stubs:"
     + os.environ.get("LIBRARY_PATH", ""),
 )
+
+# Force SDPA backend (avoids FA3/FA4 issues on various GPUs)
+import importlib.util
+_fa_spec = importlib.util.spec_from_file_location(
+    "flash_attention", str(_ar_root / "flash_attention.py"))
+_fa_mod = importlib.util.module_from_spec(_fa_spec)
+_real_import = __builtins__.__import__ if hasattr(__builtins__, '__import__') else __import__
+def _block_kernels(name, *args, **kwargs):
+    if name == "kernels":
+        raise ImportError("blocked for SDPA fallback")
+    return _real_import(name, *args, **kwargs)
+import builtins
+_saved = builtins.__import__
+builtins.__import__ = _block_kernels
+try:
+    _fa_spec.loader.exec_module(_fa_mod)
+finally:
+    builtins.__import__ = _saved
+sys.modules["flash_attention"] = _fa_mod
+print(f"Attention backend: {_fa_mod.FLASH_ATTENTION_IMPL}")
 
 import torch
 import torch._dynamo
@@ -41,17 +64,23 @@ torch.set_float32_matmul_precision("high")
 # ── Build model from autoresearch code ──────────────────────────────
 
 def _import_autoresearch_classes():
-    """Import GPT, GPTConfig, MuonAdamW from autoresearch using AST surgery.
+    """Import GPT, GPTConfig, MuonAdamW from autoresearch."""
+    import importlib
+    prepare = importlib.import_module("prepare")
 
-    Uses the recipe wrapper's approach: parse train.py AST, keep only
-    class/function/import definitions, skip the training loop.
-    """
-    from recipes.autoresearch_wrapper import _load_train_module, _init
-    # Force SDPA to avoid FA3 generating non-Python auto_functionalized ops
-    _init(flash_backend="sdpa")
-    from prepare import Tokenizer
-    ns = _load_train_module(flash_backend="sdpa")
-    return ns["GPT"], ns["GPTConfig"], ns["MuonAdamW"], Tokenizer
+    train_path = _ar_root / "train.py"
+    source = train_path.read_text()
+    marker = "# ---------------------------------------------------------------------------\n# Hyperparameters"
+    idx = source.find(marker)
+    if idx < 0:
+        raise RuntimeError("Could not find Hyperparameters section in train.py")
+
+    train_mod = types.ModuleType("train")
+    train_mod.__file__ = str(train_path)
+    sys.modules["train"] = train_mod
+    exec(compile(source[:idx], str(train_path), "exec"), train_mod.__dict__)
+    ns = train_mod.__dict__
+    return ns["GPT"], ns["GPTConfig"], ns["MuonAdamW"], prepare.Tokenizer
 
 
 def _build_autoresearch(depth: int = 4, batch_size: int = 8, seq_len: int = 512):
@@ -191,8 +220,8 @@ def bench_aten_replay(recipe: dict, warmup: int, steps: int) -> dict:
     ai.unpatch()
     ai.configure(
         cache_dir=".bench_cache/ar_aten_replay",
-        force_recapture=True,
-        verbose=True,
+        force_recapture=False,
+        verbose=False,
         capture_backward=True,
         dynamic=False,
     )

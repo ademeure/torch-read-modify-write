@@ -76,6 +76,7 @@ Parameter mapping:
 import operator
 import os
 import torch
+import torch.utils.cpp_extension
 aten = torch.ops.aten  # shorthand for low-level ops
 
 # Device: defaults to CUDA if available, use --cpu to force CPU
@@ -262,6 +263,103 @@ def _fused_mul_sum(a, b):
     """Compute sum(a * b) without materializing the product tensor."""
     return torch.sum(a * b, dtype=torch.float32)
 # ── End fused mul+sum ───────────────────────────────────────────────
+
+
+# ── Inline CUDA kernel: fused CE + softcap backward ──────────────────
+_cuda_ce_sc_bwd_cpp = """
+torch::Tensor cuda_ce_softcap_bwd(
+    torch::Tensor grad_loss, torch::Tensor log_softmax,
+    torch::Tensor targets, torch::Tensor tanh_out,
+    torch::Tensor total_weight, int64_t ignore_index);
+"""
+
+_cuda_ce_sc_bwd_cu = r"""
+#include <torch/extension.h>
+#include <cuda_bf16.h>
+
+// Fused: nll_loss_backward + log_softmax_backward + softcap_backward
+// Input: grad_loss (scalar), log_softmax [N, C], targets [N], tanh [N, C]
+// Output: bf16 [N, C] = grad * softmax_grad * softcap_grad
+__global__ void ce_softcap_bwd_kernel(
+    float grad_scale,                        // grad_loss / total_weight
+    const float* __restrict__ log_softmax,   // [N, C]
+    const int64_t* __restrict__ targets,     // [N]
+    const float* __restrict__ tanh_out,      // [N, C] (from softcap forward)
+    __nv_bfloat16* __restrict__ out,         // [N, C]
+    int N, int C, int64_t ignore_index
+) {
+    int idx = blockIdx.x * blockDim.x + threadIdx.x;
+    int row = idx / C;
+    int col = idx % C;
+    if (row >= N) return;
+
+    // Step 1: nll_loss_backward
+    // grad_nll[row, col] = -grad_scale if col == target[row], else 0
+    int64_t target = targets[row];
+    float nll_grad = 0.0f;
+    if (target != ignore_index) {
+        nll_grad = (col == target) ? -grad_scale : 0.0f;
+    }
+
+    // Step 2: log_softmax_backward
+    // grad_logsoftmax = nll_grad - exp(log_softmax) * sum(nll_grad over dim)
+    // Since nll_grad is -grad_scale at target and 0 elsewhere:
+    // sum_nll_grad = -grad_scale (for non-ignored rows)
+    // grad_logsoftmax[row, col] = nll_grad - exp(log_softmax[row, col]) * (-grad_scale)
+    //                           = nll_grad + grad_scale * exp(log_softmax[row, col])
+    float sum_nll = (target != ignore_index) ? -grad_scale : 0.0f;
+    float ls = log_softmax[row * C + col];
+    float grad_ls = nll_grad - expf(ls) * sum_nll;
+
+    // Step 3: softcap backward
+    // grad_softcap = grad_ls * (1 - tanh^2)
+    float t = tanh_out[row * C + col];
+    float result = grad_ls * (1.0f - t * t);
+
+    out[row * C + col] = __float2bfloat16(result);
+}
+
+torch::Tensor cuda_ce_softcap_bwd(
+    torch::Tensor grad_loss, torch::Tensor log_softmax,
+    torch::Tensor targets, torch::Tensor tanh_out,
+    torch::Tensor total_weight, int64_t ignore_index
+) {
+    int N = log_softmax.size(0);
+    int C = log_softmax.size(1);
+    auto out = torch::empty({N, C}, torch::dtype(torch::kBFloat16).device(log_softmax.device()));
+
+    float grad_scale = grad_loss.item<float>() / total_weight.item<float>();
+
+    int total = N * C;
+    int threads = 256;
+    int blocks = (total + threads - 1) / threads;
+
+    ce_softcap_bwd_kernel<<<blocks, threads>>>(
+        grad_scale,
+        log_softmax.data_ptr<float>(),
+        targets.data_ptr<int64_t>(),
+        tanh_out.data_ptr<float>(),
+        reinterpret_cast<__nv_bfloat16*>(out.data_ptr()),
+        N, C, ignore_index
+    );
+    return out;
+}
+"""
+
+_cuda_ce_sc_bwd_mod = torch.utils.cpp_extension.load_inline(
+    name="cuda_ce_softcap_bwd_v1",
+    cpp_sources=_cuda_ce_sc_bwd_cpp,
+    cuda_sources=_cuda_ce_sc_bwd_cu,
+    functions=["cuda_ce_softcap_bwd"],
+    verbose=False,
+)
+
+def cuda_ce_softcap_bwd(grad_loss, log_softmax, targets, tanh_out, total_weight, ignore_index=-1):
+    """Fused CE + softcap backward: nll_loss_bwd + log_softmax_bwd + softcap_bwd in one kernel."""
+    return _cuda_ce_sc_bwd_mod.cuda_ce_softcap_bwd(
+        grad_loss, log_softmax, targets, tanh_out, total_weight, ignore_index
+    ).view(tanh_out.shape)
+# ── End inline CUDA CE+softcap backward kernel ────────────────────────
 
 # ======================================================================
 # WEIGHTS / PARAMETERS
@@ -2019,13 +2117,9 @@ def backward(
 
     # /.autoresearch_repo/train.py:283
     # loss = F.cross_entropy(logits.view(-1, logits.size(-1)), targets.view(-1),
-    grad_cross_entropy_nll_loss_backward: 'float32[65536, 8192]' = aten.nll_loss_backward(tangents_1, _log_softmax, view_90, None, 1, -1, getitem_141)  # strides=(8192, 1), contiguous=True, view=False
-    grad_cross_entropy__log_softmax_backward_data: 'float32[65536, 8192]' = aten._log_softmax_backward_data(grad_cross_entropy_nll_loss_backward, detach_55, 1, torch.float32)  # strides=(8192, 1), contiguous=True, view=False
-    grad_view_36_view: 'float32[32, 2048, 8192]' = aten.view(grad_cross_entropy__log_softmax_backward_data, [32, 2048, 8192])  # strides=(16777216, 8192, 1), contiguous=True, view=True
-
+    grad_float_1__to_copy = cuda_ce_softcap_bwd(tangents_1, _log_softmax, view_90, detach_54, getitem_141)  # FUSED: CE + softcap backward in single CUDA kernel
     # /.autoresearch_repo/train.py:280
     # logits = softcap * torch.tanh(logits / softcap)
-    grad_float_1__to_copy: 'bfloat16[32, 2048, 8192]' = triton_softcap_bwd(grad_view_36_view, detach_54)  # FUSED: softcap backward via Triton
 
     # ════════════════════════════════════════════════════════════════
     # self.lm_head

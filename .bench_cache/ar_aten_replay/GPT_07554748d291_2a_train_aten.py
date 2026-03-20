@@ -256,6 +256,13 @@ def torch_add_rmsnorm(a, b, normalized_shape):
     return x, result
 # ── End fused add + RMSNorm ─────────────────────────────────────────────
 
+
+# ── Fused mul+sum: dot product without intermediate tensor ──────────
+def _fused_mul_sum(a, b):
+    """Compute sum(a * b) without materializing the product tensor."""
+    return torch.sum(a * b, dtype=torch.float32)
+# ── End fused mul+sum ───────────────────────────────────────────────
+
 # ======================================================================
 # WEIGHTS / PARAMETERS
 # ======================================================================
@@ -2216,12 +2223,10 @@ def backward(
     # /.autoresearch_repo/train.py:272
     # x = self.resid_lambdas[i] * x + self.x0_lambdas[i] * x0
     grad_mul_77_mul: 'bfloat16[32, 2048, 512]' = aten.mul.Tensor(add_76, select_15)  # strides=(1048576, 512, 1), contiguous=True, view=False
-    grad_mul_77_mul_1: 'bfloat16[32, 2048, 512]' = aten.mul.Tensor(add_76, getitem)  # strides=(1048576, 512, 1), contiguous=True, view=False
-    grad_mul_77_sum: 'float32[]' = aten.sum(grad_mul_77_mul_1, dtype=torch.float32)  # strides=(), contiguous=True, view=False
+    grad_mul_77_sum: 'float32[]' = _fused_mul_sum(add_76, getitem)  # FUSED: mul+sum without intermediate
     grad_getitem_48_select_backward: 'float32[8]' = aten.select_backward(grad_mul_77_sum, [8], 0, 7)  # strides=(1,), contiguous=True, view=False
     grad_mul_76_mul: 'bfloat16[32, 2048, 512]' = aten.mul.Tensor(add_76, select_14)  # strides=(1048576, 512, 1), contiguous=True, view=False
-    grad_mul_76_mul_1: 'bfloat16[32, 2048, 512]' = aten.mul.Tensor(add_76, add_57)  # strides=(1048576, 512, 1), contiguous=True, view=False
-    grad_mul_76_sum: 'float32[]' = aten.sum(grad_mul_76_mul_1, dtype=torch.float32)  # strides=(), contiguous=True, view=False
+    grad_mul_76_sum: 'float32[]' = _fused_mul_sum(add_76, add_57)  # FUSED: mul+sum without intermediate
     grad_getitem_47_select_backward: 'float32[8]' = aten.select_backward(grad_mul_76_sum, [8], 0, 7)  # strides=(1,), contiguous=True, view=False
 
     # ════════════════════════════════════════════════════════════════
@@ -2361,14 +2366,12 @@ def backward(
     # /.autoresearch_repo/train.py:272
     # x = self.resid_lambdas[i] * x + self.x0_lambdas[i] * x0
     grad_mul_67_mul: 'bfloat16[32, 2048, 512]' = aten.mul.Tensor(add_86, select_13)  # strides=(1048576, 512, 1), contiguous=True, view=False
-    grad_mul_67_mul_1: 'bfloat16[32, 2048, 512]' = aten.mul.Tensor(add_86, getitem)  # strides=(1048576, 512, 1), contiguous=True, view=False
-    grad_mul_67_sum: 'float32[]' = aten.sum(grad_mul_67_mul_1, dtype=torch.float32)  # strides=(), contiguous=True, view=False
+    grad_mul_67_sum: 'float32[]' = _fused_mul_sum(add_86, getitem)  # FUSED: mul+sum without intermediate
     add_87: 'bfloat16[32, 2048, 512]' = aten.add.Tensor(grad_mul_77_mul, grad_mul_67_mul)  # strides=(1048576, 512, 1), contiguous=True, view=False
     grad_getitem_42_select_backward: 'float32[8]' = aten.select_backward(grad_mul_67_sum, [8], 0, 6)  # strides=(1,), contiguous=True, view=False
     add_88: 'float32[8]' = aten.add.Tensor(grad_getitem_48_select_backward, grad_getitem_42_select_backward)  # strides=(1,), contiguous=True, view=False
     grad_mul_66_mul: 'bfloat16[32, 2048, 512]' = aten.mul.Tensor(add_86, select_12)  # strides=(1048576, 512, 1), contiguous=True, view=False
-    grad_mul_66_mul_1: 'bfloat16[32, 2048, 512]' = aten.mul.Tensor(add_86, add_49)  # strides=(1048576, 512, 1), contiguous=True, view=False
-    grad_mul_66_sum: 'float32[]' = aten.sum(grad_mul_66_mul_1, dtype=torch.float32)  # strides=(), contiguous=True, view=False
+    grad_mul_66_sum: 'float32[]' = _fused_mul_sum(add_86, add_49)  # FUSED: mul+sum without intermediate
     grad_getitem_41_select_backward: 'float32[8]' = aten.select_backward(grad_mul_66_sum, [8], 0, 6)  # strides=(1,), contiguous=True, view=False
     add_89: 'float32[8]' = aten.add.Tensor(grad_getitem_47_select_backward, grad_getitem_41_select_backward)  # strides=(1,), contiguous=True, view=False
 
@@ -2546,16 +2549,14 @@ def backward(
     # /.autoresearch_repo/train.py:272
     # x = self.resid_lambdas[i] * x + self.x0_lambdas[i] * x0
     grad_mul_55_mul: 'bfloat16[32, 2048, 512]' = aten.mul.Tensor(add_100, select_11)  # strides=(1048576, 512, 1), contiguous=True, view=False
-    grad_mul_55_mul_1: 'bfloat16[32, 2048, 512]' = aten.mul.Tensor(add_100, getitem)  # strides=(1048576, 512, 1), contiguous=True, view=False
-    grad_mul_55_sum: 'float32[]' = aten.sum(grad_mul_55_mul_1, dtype=torch.float32)  # strides=(), contiguous=True, view=False
+    grad_mul_55_sum: 'float32[]' = _fused_mul_sum(add_100, getitem)  # FUSED: mul+sum without intermediate
     add_87.add_(grad_mul_55_mul)  # in-place grad accumulation
     add_101 = add_87  # strides=(1048576, 512, 1), contiguous=True, view=False
     grad_getitem_35_select_backward: 'float32[8]' = aten.select_backward(grad_mul_55_sum, [8], 0, 5)  # strides=(1,), contiguous=True, view=False
     add_88.add_(grad_getitem_35_select_backward)  # in-place grad accumulation
     add_102 = add_88  # strides=(1,), contiguous=True, view=False
     grad_mul_54_mul: 'bfloat16[32, 2048, 512]' = aten.mul.Tensor(add_100, select_10)  # strides=(1048576, 512, 1), contiguous=True, view=False
-    grad_mul_54_mul_1: 'bfloat16[32, 2048, 512]' = aten.mul.Tensor(add_100, add_40)  # strides=(1048576, 512, 1), contiguous=True, view=False
-    grad_mul_54_sum: 'float32[]' = aten.sum(grad_mul_54_mul_1, dtype=torch.float32)  # strides=(), contiguous=True, view=False
+    grad_mul_54_sum: 'float32[]' = _fused_mul_sum(add_100, add_40)  # FUSED: mul+sum without intermediate
     grad_getitem_34_select_backward: 'float32[8]' = aten.select_backward(grad_mul_54_sum, [8], 0, 5)  # strides=(1,), contiguous=True, view=False
     add_89.add_(grad_getitem_34_select_backward)  # in-place grad accumulation
     add_103 = add_89  # strides=(1,), contiguous=True, view=False
@@ -2697,16 +2698,14 @@ def backward(
     # /.autoresearch_repo/train.py:272
     # x = self.resid_lambdas[i] * x + self.x0_lambdas[i] * x0
     grad_mul_45_mul: 'bfloat16[32, 2048, 512]' = aten.mul.Tensor(add_113, select_9)  # strides=(1048576, 512, 1), contiguous=True, view=False
-    grad_mul_45_mul_1: 'bfloat16[32, 2048, 512]' = aten.mul.Tensor(add_113, getitem)  # strides=(1048576, 512, 1), contiguous=True, view=False
-    grad_mul_45_sum: 'float32[]' = aten.sum(grad_mul_45_mul_1, dtype=torch.float32)  # strides=(), contiguous=True, view=False
+    grad_mul_45_sum: 'float32[]' = _fused_mul_sum(add_113, getitem)  # FUSED: mul+sum without intermediate
     add_101.add_(grad_mul_45_mul)  # in-place grad accumulation
     add_114 = add_101  # strides=(1048576, 512, 1), contiguous=True, view=False
     grad_getitem_29_select_backward: 'float32[8]' = aten.select_backward(grad_mul_45_sum, [8], 0, 4)  # strides=(1,), contiguous=True, view=False
     add_102.add_(grad_getitem_29_select_backward)  # in-place grad accumulation
     add_115 = add_102  # strides=(1,), contiguous=True, view=False
     grad_mul_44_mul: 'bfloat16[32, 2048, 512]' = aten.mul.Tensor(add_113, select_8)  # strides=(1048576, 512, 1), contiguous=True, view=False
-    grad_mul_44_mul_1: 'bfloat16[32, 2048, 512]' = aten.mul.Tensor(add_113, add_32)  # strides=(1048576, 512, 1), contiguous=True, view=False
-    grad_mul_44_sum: 'float32[]' = aten.sum(grad_mul_44_mul_1, dtype=torch.float32)  # strides=(), contiguous=True, view=False
+    grad_mul_44_sum: 'float32[]' = _fused_mul_sum(add_113, add_32)  # FUSED: mul+sum without intermediate
     grad_getitem_28_select_backward: 'float32[8]' = aten.select_backward(grad_mul_44_sum, [8], 0, 4)  # strides=(1,), contiguous=True, view=False
     add_103.add_(grad_getitem_28_select_backward)  # in-place grad accumulation
     add_116 = add_103  # strides=(1,), contiguous=True, view=False
@@ -2885,16 +2884,14 @@ def backward(
     # /.autoresearch_repo/train.py:272
     # x = self.resid_lambdas[i] * x + self.x0_lambdas[i] * x0
     grad_mul_33_mul: 'bfloat16[32, 2048, 512]' = aten.mul.Tensor(add_127, select_7)  # strides=(1048576, 512, 1), contiguous=True, view=False
-    grad_mul_33_mul_1: 'bfloat16[32, 2048, 512]' = aten.mul.Tensor(add_127, getitem)  # strides=(1048576, 512, 1), contiguous=True, view=False
-    grad_mul_33_sum: 'float32[]' = aten.sum(grad_mul_33_mul_1, dtype=torch.float32)  # strides=(), contiguous=True, view=False
+    grad_mul_33_sum: 'float32[]' = _fused_mul_sum(add_127, getitem)  # FUSED: mul+sum without intermediate
     add_114.add_(grad_mul_33_mul)  # in-place grad accumulation
     add_128 = add_114  # strides=(1048576, 512, 1), contiguous=True, view=False
     grad_getitem_22_select_backward: 'float32[8]' = aten.select_backward(grad_mul_33_sum, [8], 0, 3)  # strides=(1,), contiguous=True, view=False
     add_115.add_(grad_getitem_22_select_backward)  # in-place grad accumulation
     add_129 = add_115  # strides=(1,), contiguous=True, view=False
     grad_mul_32_mul: 'bfloat16[32, 2048, 512]' = aten.mul.Tensor(add_127, select_6)  # strides=(1048576, 512, 1), contiguous=True, view=False
-    grad_mul_32_mul_1: 'bfloat16[32, 2048, 512]' = aten.mul.Tensor(add_127, add_24)  # strides=(1048576, 512, 1), contiguous=True, view=False
-    grad_mul_32_sum: 'float32[]' = aten.sum(grad_mul_32_mul_1, dtype=torch.float32)  # strides=(), contiguous=True, view=False
+    grad_mul_32_sum: 'float32[]' = _fused_mul_sum(add_127, add_24)  # FUSED: mul+sum without intermediate
     grad_getitem_21_select_backward: 'float32[8]' = aten.select_backward(grad_mul_32_sum, [8], 0, 3)  # strides=(1,), contiguous=True, view=False
     add_116.add_(grad_getitem_21_select_backward)  # in-place grad accumulation
     add_130 = add_116  # strides=(1,), contiguous=True, view=False
@@ -3036,16 +3033,14 @@ def backward(
     # /.autoresearch_repo/train.py:272
     # x = self.resid_lambdas[i] * x + self.x0_lambdas[i] * x0
     grad_mul_23_mul: 'bfloat16[32, 2048, 512]' = aten.mul.Tensor(add_140, select_5)  # strides=(1048576, 512, 1), contiguous=True, view=False
-    grad_mul_23_mul_1: 'bfloat16[32, 2048, 512]' = aten.mul.Tensor(add_140, getitem)  # strides=(1048576, 512, 1), contiguous=True, view=False
-    grad_mul_23_sum: 'float32[]' = aten.sum(grad_mul_23_mul_1, dtype=torch.float32)  # strides=(), contiguous=True, view=False
+    grad_mul_23_sum: 'float32[]' = _fused_mul_sum(add_140, getitem)  # FUSED: mul+sum without intermediate
     add_128.add_(grad_mul_23_mul)  # in-place grad accumulation
     add_141 = add_128  # strides=(1048576, 512, 1), contiguous=True, view=False
     grad_getitem_16_select_backward: 'float32[8]' = aten.select_backward(grad_mul_23_sum, [8], 0, 2)  # strides=(1,), contiguous=True, view=False
     add_129.add_(grad_getitem_16_select_backward)  # in-place grad accumulation
     add_142 = add_129  # strides=(1,), contiguous=True, view=False
     grad_mul_22_mul: 'bfloat16[32, 2048, 512]' = aten.mul.Tensor(add_140, select_4)  # strides=(1048576, 512, 1), contiguous=True, view=False
-    grad_mul_22_mul_1: 'bfloat16[32, 2048, 512]' = aten.mul.Tensor(add_140, add_16)  # strides=(1048576, 512, 1), contiguous=True, view=False
-    grad_mul_22_sum: 'float32[]' = aten.sum(grad_mul_22_mul_1, dtype=torch.float32)  # strides=(), contiguous=True, view=False
+    grad_mul_22_sum: 'float32[]' = _fused_mul_sum(add_140, add_16)  # FUSED: mul+sum without intermediate
     grad_getitem_15_select_backward: 'float32[8]' = aten.select_backward(grad_mul_22_sum, [8], 0, 2)  # strides=(1,), contiguous=True, view=False
     add_130.add_(grad_getitem_15_select_backward)  # in-place grad accumulation
     add_143 = add_130  # strides=(1,), contiguous=True, view=False
@@ -3224,16 +3219,14 @@ def backward(
     # /.autoresearch_repo/train.py:272
     # x = self.resid_lambdas[i] * x + self.x0_lambdas[i] * x0
     grad_mul_11_mul: 'bfloat16[32, 2048, 512]' = aten.mul.Tensor(add_154, select_3)  # strides=(1048576, 512, 1), contiguous=True, view=False
-    grad_mul_11_mul_1: 'bfloat16[32, 2048, 512]' = aten.mul.Tensor(add_154, getitem)  # strides=(1048576, 512, 1), contiguous=True, view=False
-    grad_mul_11_sum: 'float32[]' = aten.sum(grad_mul_11_mul_1, dtype=torch.float32)  # strides=(), contiguous=True, view=False
+    grad_mul_11_sum: 'float32[]' = _fused_mul_sum(add_154, getitem)  # FUSED: mul+sum without intermediate
     add_141.add_(grad_mul_11_mul)  # in-place grad accumulation
     add_155 = add_141  # strides=(1048576, 512, 1), contiguous=True, view=False
     grad_getitem_9_select_backward: 'float32[8]' = aten.select_backward(grad_mul_11_sum, [8], 0, 1)  # strides=(1,), contiguous=True, view=False
     add_142.add_(grad_getitem_9_select_backward)  # in-place grad accumulation
     add_156 = add_142  # strides=(1,), contiguous=True, view=False
     grad_mul_10_mul: 'bfloat16[32, 2048, 512]' = aten.mul.Tensor(add_154, select_2)  # strides=(1048576, 512, 1), contiguous=True, view=False
-    grad_mul_10_mul_1: 'bfloat16[32, 2048, 512]' = aten.mul.Tensor(add_154, add_7)  # strides=(1048576, 512, 1), contiguous=True, view=False
-    grad_mul_10_sum: 'float32[]' = aten.sum(grad_mul_10_mul_1, dtype=torch.float32)  # strides=(), contiguous=True, view=False
+    grad_mul_10_sum: 'float32[]' = _fused_mul_sum(add_154, add_7)  # FUSED: mul+sum without intermediate
     grad_getitem_8_select_backward: 'float32[8]' = aten.select_backward(grad_mul_10_sum, [8], 0, 1)  # strides=(1,), contiguous=True, view=False
     add_143.add_(grad_getitem_8_select_backward)  # in-place grad accumulation
     add_157 = add_143  # strides=(1,), contiguous=True, view=False
@@ -3385,16 +3378,14 @@ def backward(
     # /.autoresearch_repo/train.py:272
     # x = self.resid_lambdas[i] * x + self.x0_lambdas[i] * x0
     grad_mul_1_mul: 'bfloat16[32, 2048, 512]' = aten.mul.Tensor(add_167, select_1)  # strides=(1048576, 512, 1), contiguous=True, view=False
-    grad_mul_1_mul_1: 'bfloat16[32, 2048, 512]' = aten.mul.Tensor(add_167, getitem)  # strides=(1048576, 512, 1), contiguous=True, view=False
-    grad_mul_1_sum: 'float32[]' = aten.sum(grad_mul_1_mul_1, dtype=torch.float32)  # strides=(), contiguous=True, view=False
+    grad_mul_1_sum: 'float32[]' = _fused_mul_sum(add_167, getitem)  # FUSED: mul+sum without intermediate
     add_155.add_(grad_mul_1_mul)  # in-place grad accumulation
     add_168 = add_155  # strides=(1048576, 512, 1), contiguous=True, view=False
     grad_getitem_3_select_backward: 'float32[8]' = aten.select_backward(grad_mul_1_sum, [8], 0, 0)  # strides=(1,), contiguous=True, view=False
     add_156.add_(grad_getitem_3_select_backward)  # in-place grad accumulation
     add_169 = add_156  # strides=(1,), contiguous=True, view=False
     grad_mul_mul: 'bfloat16[32, 2048, 512]' = aten.mul.Tensor(add_167, select)  # strides=(1048576, 512, 1), contiguous=True, view=False
-    grad_mul_mul_1: 'bfloat16[32, 2048, 512]' = aten.mul.Tensor(add_167, getitem)  # strides=(1048576, 512, 1), contiguous=True, view=False
-    grad_mul_sum: 'float32[]' = aten.sum(grad_mul_mul_1, dtype=torch.float32)  # strides=(), contiguous=True, view=False
+    grad_mul_sum: 'float32[]' = _fused_mul_sum(add_167, getitem)  # FUSED: mul+sum without intermediate
     add_168.add_(grad_mul_mul)  # in-place grad accumulation
     add_170 = add_168  # strides=(1048576, 512, 1), contiguous=True, view=False
     grad_getitem_2_select_backward: 'float32[8]' = aten.select_backward(grad_mul_sum, [8], 0, 0)  # strides=(1,), contiguous=True, view=False

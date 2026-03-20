@@ -2058,6 +2058,7 @@ def _build_group_from_instances(
     compute_nodes: list[Node],
     ir_nodes_by_name: dict[str, dict],
     name_remap: dict[str, str],
+    source_map: dict | None = None,
 ) -> _UniqueGroup | None:
     """Build a ``_UniqueGroup`` from structurally-matched instances.
 
@@ -2269,6 +2270,11 @@ def _build_group_from_instances(
     else:
         local_remap_re = None
 
+    # Source annotation state for the function body
+    body_group_key = None
+    body_top_module = None
+    common_source_dir = None  # could be threaded from caller if needed
+
     for node in template_nodes:
         ir_node = ir_nodes_by_name.get(node.name)
         if ir_node is None:
@@ -2276,8 +2282,60 @@ def _build_group_from_instances(
         line = ir_node["python"]
         if not line:
             continue
+
+        # ── Source annotations (same logic as main export loop) ──
+        mod_path, mod_type_s, src_fn = _extract_source_group(node)
+        trace = _lookup_source_trace(mod_path, src_fn, source_map) if source_map else None
+
+        compact_lines = []
+        annotation_key = None
+        if mod_path:
+            annotation_key = ("module", _group_key(node))
+        elif trace:
+            compact_lines = _format_compact_source_comments(trace, common_source_dir)
+            annotation_key = (
+                "source",
+                _shorten_source_path(trace.file, common_source_dir) if trace.file else "",
+                trace.line,
+                trace.code,
+            )
+        elif src_fn:
+            annotation_key = ("source_fn", src_fn)
+
+        if annotation_key and annotation_key != body_group_key:
+            body_group_key = annotation_key
+
+            if mod_path:
+                clean = _clean_self_path(mod_path)
+                parts = clean.split(".")
+                top = clean
+                for i, p in enumerate(parts):
+                    if p.isdigit() and i >= 2:
+                        top = ".".join(parts[:i + 1])
+                        break
+                else:
+                    top = ".".join(parts[:min(3, len(parts))])
+                if top != body_top_module:
+                    body_top_module = top
+
+            if compact_lines:
+                body_lines.append("")
+                for cl in compact_lines:
+                    body_lines.append(f"    # {cl}")
+            else:
+                header_lines = _format_group_header(
+                    mod_path, mod_type_s, src_fn, trace,
+                    is_backward=False,
+                    common_source_dir=common_source_dir,
+                )
+                if header_lines:
+                    body_lines.append("")
+                    for hl in header_lines:
+                        body_lines.append(f"    # {hl}")
+
         if local_remap_re is not None:
             line = local_remap_re.sub(lambda m: local_remap.get(m.group(0), m.group(0)), line)
+        line += ir_node.get("stride_comment", "")
         for sub in line.split("\n"):
             body_lines.append(f"    {sub}")
 
@@ -2505,6 +2563,7 @@ def _detect_unique_groups(
                 template, all_types[template],
                 subset_instances, subset_ir, instance_order,
                 compute_nodes, ir_nodes_by_name, name_remap,
+                source_map=source_map,
             )
             if group is not None:
                 groups.append(group)

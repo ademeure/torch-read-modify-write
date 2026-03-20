@@ -93,6 +93,8 @@ def main():
     p.add_argument("--filter", default=None, help="Only run tests matching this substring")
     p.add_argument("--seeds", type=int, default=1,
                    help="Number of random seeds to test per op (seed 0 = special values). Default: 1")
+    p.add_argument("--sizes", action="store_true",
+                   help="Also test with different tensor sizes (16, 256, 4096) per op")
     args = p.parse_args()
 
     directory = os.path.abspath(args.directory)
@@ -163,21 +165,39 @@ def main():
                     smem=state.get("smem"),
                 )
 
-            # Determine seeds to test
+            # Determine seeds and sizes to test
             has_make_inputs = hasattr(mod, "make_inputs")
             has_expected_fn = hasattr(mod, "expected")
             num_seeds = args.seeds if (has_make_inputs and has_expected_fn) else 1
 
-            # seeds: 0=special, 1..N=random
+            # Check if make_inputs accepts 'n' parameter for size testing
+            has_n_param = False
+            if has_make_inputs:
+                mi_sig = inspect.signature(mod.make_inputs)
+                has_n_param = 'n' in mi_sig.parameters
+
+            # Build test configs: [(n, seed), ...]
             seeds = list(range(num_seeds)) if num_seeds > 1 else [1]
+            if args.sizes and has_n_param and has_make_inputs and has_expected_fn:
+                # Test multiple sizes, but only with seed=1 for non-default sizes
+                configs = [(1024, s) for s in seeds]  # default size, all seeds
+                for sz in [16, 256, 4096]:
+                    configs.append((sz, 1))  # extra sizes, seed=1 only
+            else:
+                configs = [(1024, s) for s in seeds]
+
             atol = state.get("atol", args.atol)
             rtol = state.get("rtol", args.rtol)
 
             all_ok = True
             fail_msg = ""
-            for seed in seeds:
+            num_tested = 0
+            for test_n, seed in configs:
                 if has_make_inputs and has_expected_fn:
-                    inputs = mod.make_inputs(seed=seed)
+                    if has_n_param:
+                        inputs = mod.make_inputs(n=test_n, seed=seed)
+                    else:
+                        inputs = mod.make_inputs(seed=seed)
                     exp = mod.expected(inputs)
                 else:
                     inputs = state.get("inputs", [])
@@ -204,13 +224,14 @@ def main():
                 ok, msg = _verify(result, exp, atol, rtol)
                 if not ok:
                     all_ok = False
-                    fail_msg = f"seed={seed}: {msg}"
+                    fail_msg = f"n={test_n},seed={seed}: {msg}"
                     break
+                num_tested += 1
 
             if all_ok is None:
                 continue  # skipped
             elif all_ok:
-                label = f"({num_seeds} seeds)" if num_seeds > 1 else ""
+                label = f"({num_tested} configs)" if num_tested > 1 else ""
                 passed += 1
                 print(f"PASS {name} {label}", flush=True)
             else:

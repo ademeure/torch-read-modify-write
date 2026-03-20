@@ -2,6 +2,8 @@
 import torch
 from torch_graph.cuda_ref_kernels._common import compile_cuda, check
 
+aten = torch.ops.aten
+
 KERNEL_SRC = r"""
 #include <cuda_runtime.h>
 #include <math.h>
@@ -26,7 +28,7 @@ def test():
     ext = compile_cuda("aten_leaky_relu", KERNEL_SRC, ["aten_leaky_relu_fwd"])
     x = torch.randn(1024, device='cuda')
     result = ext.aten_leaky_relu_fwd(x)
-    expected = torch.nn.functional.leaky_relu(x, 0.01)
+    expected = aten.leaky_relu.default(x, 0.01)
     check("aten.leaky_relu", result, expected, atol=1e-06)
     print(f"PASS aten.leaky_relu")
 

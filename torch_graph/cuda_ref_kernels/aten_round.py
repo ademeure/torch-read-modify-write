@@ -2,6 +2,8 @@
 import torch
 from torch_graph.cuda_ref_kernels._common import compile_cuda, check
 
+aten = torch.ops.aten
+
 KERNEL_SRC = r"""
 #include <cuda_runtime.h>
 #include <math.h>
@@ -26,7 +28,7 @@ def test():
     ext = compile_cuda("aten_round", KERNEL_SRC, ["aten_round_fwd"])
     x = torch.randn(1024, device='cuda') * 10
     result = ext.aten_round_fwd(x)
-    expected = x.round()
+    expected = aten.round.default(x)
     check("aten.round", result, expected)
     print(f"PASS aten.round")
 

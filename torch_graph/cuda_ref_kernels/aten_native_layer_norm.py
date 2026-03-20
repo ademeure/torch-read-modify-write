@@ -2,6 +2,8 @@
 import torch
 from torch_graph.cuda_ref_kernels._common import compile_cuda, check
 
+aten = torch.ops.aten
+
 KERNEL_SRC = r"""
 #include <cuda_runtime.h>
 #include <math.h>
@@ -59,8 +61,8 @@ def test():
     w = torch.randn(64, device="cuda")
     b = torch.randn(64, device="cuda")
     result = ext.aten_layer_norm_fwd(x, w, b, 1e-5)
-    expected = torch.nn.functional.layer_norm(x, [64], w, b, 1e-5)
-    check("aten.native_layer_norm", result[0], expected, atol=1e-4)
+    expected = aten.native_layer_norm.default(x, [64], w, b, 1e-5)
+    check("aten.native_layer_norm", result[0], expected[0], atol=1e-4)
     print("PASS aten.native_layer_norm")
 
 if __name__ == "__main__":

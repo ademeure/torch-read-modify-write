@@ -2,6 +2,8 @@
 import torch
 from torch_graph.cuda_ref_kernels._common import compile_cuda, check
 
+aten = torch.ops.aten
+
 KERNEL_SRC = r"""
 #include <cuda_runtime.h>
 #include <math.h>
@@ -26,7 +28,7 @@ def test():
     ext = compile_cuda("aten_hardsigmoid", KERNEL_SRC, ["aten_hardsigmoid_fwd"])
     x = torch.randn(1024, device='cuda') * 5
     result = ext.aten_hardsigmoid_fwd(x)
-    expected = torch.nn.functional.hardsigmoid(x)
+    expected = aten.hardsigmoid.default(x)
     check("aten.hardsigmoid", result, expected, atol=1e-05)
     print(f"PASS aten.hardsigmoid")
 

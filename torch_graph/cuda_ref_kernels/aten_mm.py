@@ -2,10 +2,11 @@
 import torch
 from torch_graph.cuda_ref_kernels._common import compile_cuda, check
 
+aten = torch.ops.aten
+
 KERNEL_SRC = r"""
 #include <cuda_runtime.h>
 
-// One thread per output element. O(M*N*K) total work, no tiling, no shared mem.
 extern "C" __global__ void aten_mm(
     const float *A, const float *B, float *C,
     unsigned int M, unsigned int K, unsigned int N
@@ -37,7 +38,7 @@ def test():
     A = torch.randn(64, 32, device="cuda")
     B = torch.randn(32, 48, device="cuda")
     result = ext.aten_mm_fwd(A.contiguous(), B.contiguous())
-    expected = torch.mm(A, B)
+    expected = aten.mm.default(A, B)
     check("aten.mm", result, expected, atol=1e-3)
     print("PASS aten.mm")
 

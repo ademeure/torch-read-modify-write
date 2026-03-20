@@ -2,6 +2,8 @@
 import torch
 from torch_graph.cuda_ref_kernels._common import compile_cuda, check
 
+aten = torch.ops.aten
+
 KERNEL_SRC = r"""
 #include <cuda_runtime.h>
 #include <math.h>
@@ -28,7 +30,7 @@ def test():
     a = torch.randn(1024, device='cuda')
     b = torch.randn(1024, device='cuda').abs() + 0.1
     result = ext.aten_div_fwd(a, b)
-    expected = a / b
+    expected = aten.div.Tensor(a, b)
     check("aten.div", result, expected, atol=1e-05)
     print(f"PASS aten.div")
 

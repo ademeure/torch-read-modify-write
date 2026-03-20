@@ -1,6 +1,8 @@
-"""Reference CUDA kernel for aten._softmax."""
+"""Reference CUDA kernel for aten._softmax — 3-pass: max, exp+sum, normalize."""
 import torch
 from torch_graph.cuda_ref_kernels._common import compile_cuda, check
+
+aten = torch.ops.aten
 
 KERNEL_SRC = r"""
 #include <cuda_runtime.h>
@@ -14,7 +16,6 @@ extern "C" __global__ void aten_softmax(
     if (row >= rows) return;
     const float *ri = input + row * cols;
     float *ro = output + row * cols;
-    // Pass 1: max
     float v = -1e38f;
     for (unsigned int j = tid; j < cols; j += blockDim.x) v = fmaxf(v, ri[j]);
     sdata[tid] = v; __syncthreads();
@@ -22,7 +23,6 @@ extern "C" __global__ void aten_softmax(
         if (tid < s) sdata[tid] = fmaxf(sdata[tid], sdata[tid+s]); __syncthreads();
     }
     float row_max = sdata[0];
-    // Pass 2: exp + sum
     float lsum = 0.0f;
     for (unsigned int j = tid; j < cols; j += blockDim.x) {
         float e = expf(ri[j] - row_max); ro[j] = e; lsum += e;
@@ -32,7 +32,6 @@ extern "C" __global__ void aten_softmax(
         if (tid < s) sdata[tid] += sdata[tid+s]; __syncthreads();
     }
     float inv = 1.0f / sdata[0];
-    // Pass 3: normalize
     for (unsigned int j = tid; j < cols; j += blockDim.x) ro[j] *= inv;
 }
 
@@ -53,7 +52,7 @@ def test():
     ext = compile_cuda("aten_softmax", KERNEL_SRC, ["aten_softmax_fwd"])
     x = torch.randn(8, 64, device="cuda")
     result = ext.aten_softmax_fwd(x)
-    expected = torch.softmax(x, dim=-1)
+    expected = aten._softmax.default(x, -1, False)
     check("aten._softmax", result, expected, atol=1e-5)
     print("PASS aten._softmax")
 

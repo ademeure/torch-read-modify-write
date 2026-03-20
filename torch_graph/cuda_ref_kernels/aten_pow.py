@@ -2,6 +2,8 @@
 import torch
 from torch_graph.cuda_ref_kernels._common import compile_cuda, check
 
+aten = torch.ops.aten
+
 KERNEL_SRC = r"""
 #include <cuda_runtime.h>
 #include <math.h>
@@ -28,7 +30,7 @@ def test():
     a = torch.rand(1024, device='cuda') + 0.1
     b = torch.rand(1024, device='cuda') * 3
     result = ext.aten_pow_fwd(a, b)
-    expected = a.pow(b)
+    expected = aten.pow.Tensor_Tensor(a, b)
     check("aten.pow", result, expected, atol=0.0001)
     print(f"PASS aten.pow")
 

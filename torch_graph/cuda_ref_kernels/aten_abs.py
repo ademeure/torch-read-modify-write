@@ -2,6 +2,8 @@
 import torch
 from torch_graph.cuda_ref_kernels._common import compile_cuda, check
 
+aten = torch.ops.aten
+
 KERNEL_SRC = r"""
 #include <cuda_runtime.h>
 #include <math.h>
@@ -26,7 +28,7 @@ def test():
     ext = compile_cuda("aten_abs", KERNEL_SRC, ["aten_abs_fwd"])
     x = torch.randn(1024, device='cuda')
     result = ext.aten_abs_fwd(x)
-    expected = x.abs()
+    expected = aten.abs.default(x)
     check("aten.abs", result, expected)
     print(f"PASS aten.abs")
 

@@ -2,6 +2,8 @@
 import torch
 from torch_graph.cuda_ref_kernels._common import compile_cuda, check
 
+aten = torch.ops.aten
+
 KERNEL_SRC = r"""
 #include <cuda_runtime.h>
 
@@ -37,7 +39,7 @@ def test():
     A = torch.randn(64, 32, device="cuda")
     B = torch.randn(32, 48, device="cuda")
     result = ext.aten_addmm_fwd(bias, A.contiguous(), B.contiguous())
-    expected = torch.addmm(bias, A, B)
+    expected = aten.addmm.default(bias, A, B)
     check("aten.addmm", result, expected, atol=1e-3)
     print("PASS aten.addmm")
 

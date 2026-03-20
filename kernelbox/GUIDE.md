@@ -12,9 +12,9 @@ This guide covers every feature with real-world examples you can run directly.
 ## Quick Start
 
 ```bash
-# Install dependencies and build
-uv sync
-make tools
+# Install dependencies, build, and put kbox on PATH
+make setup          # uv sync + build tools
+sudo make install   # install kbox to /usr/local/bin
 
 # Run a test in watch mode (hot-reloads on save)
 kbox iterate examples/dev/test_scale.py

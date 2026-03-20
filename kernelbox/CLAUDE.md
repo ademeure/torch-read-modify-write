@@ -6,7 +6,10 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 
 ```bash
 # Setup
-uv sync                  # Install Python dependencies
+make setup               # uv sync + build everything
+sudo make install        # Install kbox to /usr/local/bin (auto-detects .venv)
+
+# Individual targets
 make all                 # Build everything (tools + C smoke tests)
 make tools               # Build just kbox CLI and worker daemon
 

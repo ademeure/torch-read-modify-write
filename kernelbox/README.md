@@ -14,8 +14,8 @@ The old `run/test/suite/daemon/full-isolation` toolchain is intentionally gone o
 ## Quick Start
 
 ```bash
-uv sync
-make tools
+make setup          # uv sync + build tools
+sudo make install   # install kbox to /usr/local/bin (auto-detects .venv)
 
 kbox iterate examples/dev/test_scale.py
 kbox iterate examples/dev/test_mlp_suite.py --once

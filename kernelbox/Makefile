@@ -19,8 +19,9 @@ TOOLS     = $(TOOL_BIN)/kbox $(TOOL_BIN)/kbox_worker_daemon
 PREFIX    ?= /usr/local
 BINDIR    = $(PREFIX)/bin
 LIBEXECDIR = $(PREFIX)/libexec/kbox
+VENV_PYTHON = $(CURDIR)/.venv/bin/python3
 
-.PHONY: all tools test test-cli test-all clean install uninstall sync-python compile_commands.json
+.PHONY: all tools test test-cli test-all clean setup install uninstall sync-python compile_commands.json
 
 all: $(CORE_OBJS) $(C_TESTS) $(TOOLS)
 
@@ -72,6 +73,11 @@ sync-python:
 	@command -v uv >/dev/null 2>&1 || { echo "Error: uv not found. Install it: curl -LsSf https://astral.sh/uv/install.sh | sh"; exit 1; }
 	uv sync
 
+setup: sync-python all
+	@echo ""
+	@echo "Setup complete. Run 'sudo make install' to install kbox to $(PREFIX)/bin,"
+	@echo "or use ./build/tools/kbox directly."
+
 install: all
 	@echo "Installing kbox to $(PREFIX)..."
 	install -d $(LIBEXECDIR)
@@ -80,7 +86,18 @@ install: all
 	install -m 755 tools/kbox_isolated_kernel_mode.py $(LIBEXECDIR)/
 	install -m 755 tools/kbox_mcp.py $(LIBEXECDIR)/
 	install -d $(BINDIR)
-	install -m 755 $(TOOL_BIN)/kbox $(BINDIR)/
+	@# Generate a wrapper that sets KBOX_PYTHON to the project venv
+	@if [ -x "$(VENV_PYTHON)" ]; then \
+		echo '#!/bin/sh' > $(BINDIR)/kbox; \
+		echo 'export KBOX_PYTHON="$(VENV_PYTHON)"' >> $(BINDIR)/kbox; \
+		echo 'exec "$(CURDIR)/$(TOOL_BIN)/kbox" "$$@"' >> $(BINDIR)/kbox; \
+		chmod 755 $(BINDIR)/kbox; \
+		echo "  installed $(BINDIR)/kbox (wrapper → $(VENV_PYTHON))"; \
+	else \
+		install -m 755 $(TOOL_BIN)/kbox $(BINDIR)/; \
+		echo "  installed $(BINDIR)/kbox (no venv found — will use system python3)"; \
+		echo "  hint: run 'make setup' first to create .venv"; \
+	fi
 
 uninstall:
 	rm -f $(BINDIR)/kbox

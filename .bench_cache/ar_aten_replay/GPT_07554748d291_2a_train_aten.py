@@ -3643,17 +3643,7 @@ def backward(
     grad_h0_attn__fused_rms_norm_backward_1 = aten._fused_rms_norm_backward(grad_h0_attn_transpose_3, cat, [128], detach_2, None, [True, False])  # out0: strides=(1048576, 512, 128, 1), contiguous=True, view=False
     grad_h0_attn_getitem_4: 'bfloat16[32, 2048, 4, 128]' = operator.getitem(grad_h0_attn__fused_rms_norm_backward_1, 0)  # strides=(1048576, 512, 128, 1), contiguous=True, view=True
     add_161 = torch_rope_fwd(grad_h0_attn_getitem_3, slice_1, neg_1)  # FUSED: backward RoPE (11 ops -> 4 kernels)
-    grad_h0_attn_slice_2: 'bfloat16[32, 2048, 4, 64]' = aten.slice.Tensor(grad_h0_attn_getitem_4, 3, 0, 64)  # strides=(1048576, 512, 128, 1), contiguous=False, view=True
-    grad_h0_attn_slice_3: 'bfloat16[32, 2048, 4, 64]' = aten.slice.Tensor(grad_h0_attn_getitem_4, 3, 64, 128)  # strides=(1048576, 512, 128, 1), contiguous=False, view=True
-    grad_h0_attn_mul_4: 'bfloat16[32, 2048, 4, 64]' = aten.mul.Tensor(grad_h0_attn_slice_3, slice_1)  # strides=(524288, 256, 64, 1), contiguous=True, view=False
-    grad_h0_attn_mul_5: 'bfloat16[32, 2048, 4, 64]' = aten.mul.Tensor(grad_h0_attn_slice_3, neg)  # strides=(524288, 256, 64, 1), contiguous=True, view=False
-    grad_h0_attn_mul_6: 'bfloat16[32, 2048, 4, 64]' = aten.mul.Tensor(grad_h0_attn_slice_2, slice_2)  # strides=(524288, 256, 64, 1), contiguous=True, view=False
-    add_162: 'bfloat16[32, 2048, 4, 64]' = aten.add.Tensor(grad_h0_attn_mul_4, grad_h0_attn_mul_6)  # strides=(524288, 256, 64, 1), contiguous=True, view=False
-    grad_h0_attn_mul_7: 'bfloat16[32, 2048, 4, 64]' = aten.mul.Tensor(grad_h0_attn_slice_2, slice_1)  # strides=(524288, 256, 64, 1), contiguous=True, view=False
-    add_163: 'bfloat16[32, 2048, 4, 64]' = aten.add.Tensor(grad_h0_attn_mul_5, grad_h0_attn_mul_7)  # strides=(524288, 256, 64, 1), contiguous=True, view=False
-    grad_h0_attn_slice_backward_2: 'bfloat16[32, 2048, 4, 128]' = aten.slice_backward(add_162, [32, 2048, 4, 128], 3, 64, 9223372036854775807, 1)  # strides=(1048576, 512, 128, 1), contiguous=True, view=False
-    grad_h0_attn_slice_backward_3: 'bfloat16[32, 2048, 4, 128]' = aten.slice_backward(add_163, [32, 2048, 4, 128], 3, 0, 64, 1)  # strides=(1048576, 512, 128, 1), contiguous=True, view=False
-    add_164: 'bfloat16[32, 2048, 4, 128]' = aten.add.Tensor(grad_h0_attn_slice_backward_2, grad_h0_attn_slice_backward_3)  # strides=(1048576, 512, 128, 1), contiguous=True, view=False
+    add_164 = torch_rope_fwd(grad_h0_attn_getitem_4, slice_1, neg)  # FUSED: backward RoPE Q for h0 (11 ops -> 4 kernels)
     grad_h0_attn_view_1: 'bfloat16[32, 2048, 512]' = aten.view(grad_h0_attn_transpose_1, [32, 2048, 512])  # strides=(1048576, 512, 1), contiguous=True, view=True
 
     # grad of self.transformer.h.0.attn.c_v (Linear) → d_loss/d_c_v

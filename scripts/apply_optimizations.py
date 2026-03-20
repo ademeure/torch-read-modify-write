@@ -81,6 +81,7 @@ TRITON_SOFTCAP_FWD = '''\
 # ── Triton softcap forward kernel ────────────────────────────────────
 import triton
 import triton.language as tl
+from triton.language.extra.cuda import libdevice as _libdevice
 
 @triton.jit
 def _softcap_fwd_kernel(
@@ -91,7 +92,7 @@ def _softcap_fwd_kernel(
     offs = pid * BLOCK + tl.arange(0, BLOCK)
     mask = offs < n
     x = tl.load(x_ptr + offs, mask=mask).to(tl.float32)
-    t = tl.math.tanh(x / softcap)
+    t = _libdevice.tanh(x / softcap)
     tl.store(out_ptr + offs, t * softcap, mask=mask)
     tl.store(tanh_ptr + offs, t, mask=mask)
 
@@ -100,7 +101,7 @@ def triton_softcap_fwd(x_bf16, softcap=15):
     n = x_bf16.numel()
     out = torch.empty(x_bf16.shape, dtype=torch.float32, device=x_bf16.device)
     tanh_out = torch.empty(x_bf16.shape, dtype=torch.float32, device=x_bf16.device)
-    _softcap_fwd_kernel[(n + 1023) // 1024](x_bf16, out, tanh_out, n, softcap=softcap, BLOCK=1024)
+    _softcap_fwd_kernel[((n + 1023) // 1024,)](x_bf16, out, tanh_out, n, softcap=softcap, BLOCK=1024)
     return out, tanh_out
 # ── End Triton softcap forward kernel ────────────────────────────────
 '''
@@ -128,7 +129,7 @@ def triton_softcap_bwd(grad_fp32, tanh_fp32):
     """Fused softcap backward: grad * (1 - tanh^2) -> bf16."""
     n = grad_fp32.numel()
     out = torch.empty(grad_fp32.shape, dtype=torch.bfloat16, device=grad_fp32.device)
-    _softcap_bwd_kernel[(n + 1023) // 1024](grad_fp32, tanh_fp32, out, n, BLOCK=1024)
+    _softcap_bwd_kernel[((n + 1023) // 1024,)](grad_fp32, tanh_fp32, out, n, BLOCK=1024)
     return out
 # ── End Triton softcap backward kernel ───────────────────────────────
 '''
@@ -157,7 +158,7 @@ def triton_lambda_scale(x, x0, a_scalar, b_scalar):
     out = torch.empty_like(x)
     a_val = a_scalar.item() if hasattr(a_scalar, 'item') else float(a_scalar)
     b_val = b_scalar.item() if hasattr(b_scalar, 'item') else float(b_scalar)
-    _lambda_scale_kernel[(n + 1023) // 1024](x, x0, out, a_val, b_val, n, BLOCK=1024)
+    _lambda_scale_kernel[((n + 1023) // 1024,)](x, x0, out, a_val, b_val, n, BLOCK=1024)
     return out
 # ── End Triton lambda scaling kernel ─────────────────────────────────
 '''
@@ -188,7 +189,7 @@ def triton_squared_relu_bwd(grad_fp32, relu_fp32, relu_bf16):
     """Fused squared ReLU backward: grad * 2 * relu * (relu > 0) -> bf16."""
     n = grad_fp32.numel()
     out = torch.empty(grad_fp32.shape, dtype=torch.bfloat16, device=grad_fp32.device)
-    _sqrelu_bwd_kernel[(n + 1023) // 1024](grad_fp32, relu_fp32, relu_bf16, out, n, BLOCK=1024)
+    _sqrelu_bwd_kernel[((n + 1023) // 1024,)](grad_fp32, relu_fp32, relu_bf16, out, n, BLOCK=1024)
     return out
 # ── End Triton squared ReLU backward kernel ──────────────────────────
 '''
@@ -223,7 +224,7 @@ def triton_squared_relu_fwd(x_bf16):
     relu_bf16 = torch.empty_like(x_bf16)
     relu_fp32 = torch.empty(x_bf16.shape, dtype=torch.float32, device=x_bf16.device)
     sq_bf16 = torch.empty_like(x_bf16)
-    _sqrelu_fwd_kernel[(n + 1023) // 1024](x_bf16, relu_bf16, relu_fp32, sq_bf16, n, BLOCK=1024)
+    _sqrelu_fwd_kernel[((n + 1023) // 1024,)](x_bf16, relu_bf16, relu_fp32, sq_bf16, n, BLOCK=1024)
     return relu_bf16, relu_fp32, sq_bf16
 # ── End Triton squared ReLU forward kernel ───────────────────────────
 '''

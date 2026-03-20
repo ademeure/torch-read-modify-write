@@ -87,6 +87,33 @@ _dev_parser.add_argument("--rtol", type=float, default=None, help="Relative tole
 _dev_args, _ = _dev_parser.parse_known_args()
 _device = "cpu" if _dev_args.cpu else ("cuda" if torch.cuda.is_available() else "cpu")
 
+# ── Triton softcap forward kernel ────────────────────────────────────
+import triton
+import triton.language as tl
+from triton.language.extra.cuda import libdevice as _libdevice
+
+@triton.jit
+def _softcap_fwd_kernel(
+    x_ptr, out_ptr, tanh_ptr, n,
+    softcap: tl.constexpr, BLOCK: tl.constexpr,
+):
+    pid = tl.program_id(0)
+    offs = pid * BLOCK + tl.arange(0, BLOCK)
+    mask = offs < n
+    x = tl.load(x_ptr + offs, mask=mask).to(tl.float32)
+    t = _libdevice.tanh(x / softcap)
+    tl.store(out_ptr + offs, t * softcap, mask=mask)
+    tl.store(tanh_ptr + offs, t, mask=mask)
+
+def triton_softcap_fwd(x_bf16, softcap=15):
+    """Fused softcap: bf16->fp32, div, tanh, mul. Returns (softcapped_fp32, tanh_fp32)."""
+    n = x_bf16.numel()
+    out = torch.empty(x_bf16.shape, dtype=torch.float32, device=x_bf16.device)
+    tanh_out = torch.empty(x_bf16.shape, dtype=torch.float32, device=x_bf16.device)
+    _softcap_fwd_kernel[((n + 1023) // 1024,)](x_bf16, out, tanh_out, n, softcap=softcap, BLOCK=1024)
+    return out, tanh_out
+# ── End Triton softcap forward kernel ────────────────────────────────
+
 # ======================================================================
 # WEIGHTS / PARAMETERS
 # ======================================================================
@@ -1704,14 +1731,7 @@ def forward(
 
     # /.autoresearch_repo/train.py:279
     # logits = logits.float()
-    float_1__to_copy: 'float32[32, 2048, 8192]' = aten._to_copy(lm_head__unsafe_view, dtype=torch.float32)  # strides=(16777216, 8192, 1), contiguous=True, view=False
-
-    # /.autoresearch_repo/train.py:280
-    # logits = softcap * torch.tanh(logits / softcap)
-    truediv_div: 'float32[32, 2048, 8192]' = aten.div.Tensor(float_1__to_copy, 15)  # strides=(16777216, 8192, 1), contiguous=True, view=False
-    tanh_tanh: 'float32[32, 2048, 8192]' = aten.tanh(truediv_div)  # strides=(16777216, 8192, 1), contiguous=True, view=False
-    tanh_detach: 'float32[32, 2048, 8192]' = aten.detach(tanh_tanh)  # strides=(16777216, 8192, 1), contiguous=True, view=True
-    mul_88_mul: 'float32[32, 2048, 8192]' = aten.mul.Tensor(tanh_tanh, 15)  # strides=(16777216, 8192, 1), contiguous=True, view=False
+    mul_88_mul, tanh_detach = triton_softcap_fwd(lm_head__unsafe_view, softcap=15)  # FUSED: softcap forward via Triton
 
     # /.autoresearch_repo/train.py:283
     # loss = F.cross_entropy(logits.view(-1, logits.size(-1)), targets.view(-1),

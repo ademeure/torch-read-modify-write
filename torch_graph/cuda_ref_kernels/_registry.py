@@ -664,6 +664,620 @@ _reg("eye", kernel=_EYE_KERNEL, inputs=lambda d, s: [], dims={"d0": 16},
 _reg("alias",  kernel=_COPY_KERNEL, aten=lambda inp: [inp[0]])
 _reg("detach", kernel=_COPY_KERNEL, aten=lambda inp: [inp[0].detach()])
 
+# ─── More matmul ─────────────────────────────────────────────────────────────
+
+_BMM_KERNEL = '''extern "C" __global__ void k(
+    const float *A, const float *B, float *C,
+    unsigned int batch, unsigned int M, unsigned int K, unsigned int N
+) {
+    unsigned int b = blockIdx.z;
+    unsigned int row = blockIdx.y * blockDim.y + threadIdx.y;
+    unsigned int col = blockIdx.x * blockDim.x + threadIdx.x;
+    if (b < batch && row < M && col < N) {
+        float sum = 0.0f;
+        for (unsigned int k = 0; k < K; k++)
+            sum += A[b*M*K + row*K + k] * B[b*K*N + k*N + col];
+        C[b*M*N + row*N + col] = sum;
+    }
+}'''
+
+_reg("bmm", kernel=_BMM_KERNEL,
+     dims={"d0": 4, "d1": 16, "d2": 32, "d3": 24},  # batch, M, K, N
+     inputs=lambda d, s: [_seeded((d["d0"],d["d1"],d["d2"]), s), _seeded((d["d0"],d["d2"],d["d3"]), s+1000)],
+     aten=lambda inp: [torch.ops.aten.bmm.default(*inp).flatten()],
+     dispatch=lambda inp, k: [k(*inp, params=[
+         k.in_ptr(0), k.in_ptr(1), k.out_ptr(0),
+         np.uint32(inp[0].shape[0]), np.uint32(inp[0].shape[1]),
+         np.uint32(inp[0].shape[2]), np.uint32(inp[1].shape[2])])],
+     atol=1e-3,
+     outputs=lambda d: ["float32;n=%d" % (d["d0"]*d["d1"]*d["d3"])],
+     grid=lambda d: ((d["d3"]+15)//16, (d["d1"]+15)//16, d["d0"]), block=(16, 16))
+
+_ADDMM_KERNEL = '''extern "C" __global__ void k(
+    const float *bias, const float *A, const float *B, float *C,
+    unsigned int M, unsigned int K, unsigned int N
+) {
+    unsigned int row = blockIdx.y * blockDim.y + threadIdx.y;
+    unsigned int col = blockIdx.x * blockDim.x + threadIdx.x;
+    if (row < M && col < N) {
+        float sum = bias[col];
+        for (unsigned int k = 0; k < K; k++)
+            sum += A[row * K + k] * B[k * N + col];
+        C[row * N + col] = sum;
+    }
+}'''
+
+_reg("addmm", kernel=_ADDMM_KERNEL,
+     dims={"d0": 64, "d1": 32, "d2": 48},
+     inputs=lambda d, s: [_seeded((d["d2"],), s), _seeded((d["d0"],d["d1"]), s+100), _seeded((d["d1"],d["d2"]), s+200)],
+     aten=lambda inp: [torch.ops.aten.addmm.default(*inp).flatten()],
+     dispatch=lambda inp, k: [k(*inp, params=[
+         k.in_ptr(0), k.in_ptr(1), k.in_ptr(2), k.out_ptr(0),
+         np.uint32(inp[1].shape[0]), np.uint32(inp[1].shape[1]), np.uint32(inp[2].shape[1])])],
+     atol=1e-3,
+     outputs=lambda d: ["float32;n=%d" % (d["d0"]*d["d2"])],
+     grid=lambda d: ((d["d2"]+15)//16, (d["d0"]+15)//16), block=(16, 16))
+
+_DOT_KERNEL = '''extern "C" __global__ void k(
+    const float *a, const float *b, float *out, unsigned int n
+) {
+    __shared__ float sdata[256];
+    unsigned int tid = threadIdx.x;
+    float v = 0.0f;
+    for (unsigned int i = tid; i < n; i += blockDim.x) v += a[i] * b[i];
+    sdata[tid] = v; __syncthreads();
+    for (unsigned int s = blockDim.x/2; s > 0; s >>= 1) {
+        if (tid < s) sdata[tid] += sdata[tid+s]; __syncthreads();
+    }
+    if (tid == 0) out[0] = sdata[0];
+}'''
+
+_reg("dot", kernel=_DOT_KERNEL, dims={"n": 256},
+     inputs=_pair,
+     aten=lambda inp: [torch.ops.aten.dot.default(*inp).unsqueeze(0)],
+     dispatch=lambda inp, k: [k(*inp, params=[
+         k.in_ptr(0), k.in_ptr(1), k.out_ptr(0), np.uint32(inp[0].numel())])],
+     atol=1e-3, outputs=lambda d: ["float32;n=1"], grid=lambda d: (1,), block=(256,))
+
+_MV_KERNEL = '''extern "C" __global__ void k(
+    const float *A, const float *x, float *y, unsigned int M, unsigned int K
+) {
+    unsigned int row = blockIdx.x * blockDim.x + threadIdx.x;
+    if (row < M) {
+        float sum = 0.0f;
+        for (unsigned int k = 0; k < K; k++) sum += A[row*K + k] * x[k];
+        y[row] = sum;
+    }
+}'''
+
+_reg("mv", kernel=_MV_KERNEL, dims={"d0": 64, "d1": 32},
+     inputs=lambda d, s: [_seeded((d["d0"],d["d1"]), s), _seeded((d["d1"],), s+100)],
+     aten=lambda inp: [torch.ops.aten.mv.default(*inp)],
+     dispatch=lambda inp, k: [k(*inp, params=[
+         k.in_ptr(0), k.in_ptr(1), k.out_ptr(0),
+         np.uint32(inp[0].shape[0]), np.uint32(inp[0].shape[1])])],
+     atol=1e-3, outputs=lambda d: ["float32;n=%d" % d["d0"]],
+     grid=lambda d: ((d["d0"]+255)//256,))
+
+_OUTER_KERNEL = '''extern "C" __global__ void k(
+    const float *a, const float *b, float *out, unsigned int M, unsigned int N
+) {
+    unsigned int row = blockIdx.y * blockDim.y + threadIdx.y;
+    unsigned int col = blockIdx.x * blockDim.x + threadIdx.x;
+    if (row < M && col < N) out[row * N + col] = a[row] * b[col];
+}'''
+
+_reg("outer", kernel=_OUTER_KERNEL, dims={"d0": 64, "d1": 48},
+     inputs=lambda d, s: [_seeded((d["d0"],), s), _seeded((d["d1"],), s+100)],
+     aten=lambda inp: [torch.ops.aten.outer.default(*inp).flatten()],
+     dispatch=lambda inp, k: [k(*inp, params=[
+         k.in_ptr(0), k.in_ptr(1), k.out_ptr(0),
+         np.uint32(inp[0].numel()), np.uint32(inp[1].numel())])],
+     outputs=lambda d: ["float32;n=%d" % (d["d0"]*d["d1"])],
+     grid=lambda d: ((d["d1"]+15)//16, (d["d0"]+15)//16), block=(16, 16))
+
+# ─── Indexing ────────────────────────────────────────────────────────────────
+
+_GATHER_KERNEL = '''extern "C" __global__ void k(
+    const float *input, const long *index, float *output,
+    unsigned int rows, unsigned int in_cols, unsigned int out_cols
+) {
+    unsigned int idx = blockIdx.x * blockDim.x + threadIdx.x;
+    if (idx >= rows * out_cols) return;
+    unsigned int r = idx / out_cols, c = idx % out_cols;
+    output[idx] = input[r * in_cols + index[r * out_cols + c]];
+}'''
+
+_reg("gather", kernel=_GATHER_KERNEL, dims={"d0": 8, "d1": 32, "d2": 16},
+     inputs=lambda d, s: [_seeded((d["d0"],d["d1"]), s),
+                           torch.randint(0, d["d1"], (d["d0"],d["d2"]), device="cuda")],
+     aten=lambda inp: [torch.ops.aten.gather.default(inp[0], 1, inp[1]).flatten()],
+     dispatch=lambda inp, k: [k(*inp, params=[
+         k.in_ptr(0), k.in_ptr(1), k.out_ptr(0),
+         np.uint32(inp[0].shape[0]), np.uint32(inp[0].shape[1]), np.uint32(inp[1].shape[1])])],
+     outputs=lambda d: ["float32;n=%d" % (d["d0"]*d["d2"])],
+     grid=lambda d: ((d["d0"]*d["d2"]+255)//256,))
+
+_INDEX_SELECT_KERNEL = '''extern "C" __global__ void k(
+    const float *input, const long *index, float *output,
+    unsigned int n_idx, unsigned int cols
+) {
+    unsigned int idx = blockIdx.x * blockDim.x + threadIdx.x;
+    if (idx >= n_idx * cols) return;
+    unsigned int r = idx / cols, c = idx % cols;
+    output[idx] = input[index[r] * cols + c];
+}'''
+
+_reg("index_select", kernel=_INDEX_SELECT_KERNEL, dims={"d0": 32, "d1": 64, "d2": 5},
+     inputs=lambda d, s: [_seeded((d["d0"],d["d1"]), s),
+                           torch.tensor([0, 5, 10, 15, 31][:d["d2"]], device="cuda")],
+     aten=lambda inp: [torch.ops.aten.index_select.default(inp[0], 0, inp[1]).flatten()],
+     dispatch=lambda inp, k: [k(*inp, params=[
+         k.in_ptr(0), k.in_ptr(1), k.out_ptr(0),
+         np.uint32(inp[1].numel()), np.uint32(inp[0].shape[1])])],
+     outputs=lambda d: ["float32;n=%d" % (d["d2"]*d["d1"])],
+     grid=lambda d: ((d["d2"]*d["d1"]+255)//256,))
+
+# ─── Rearrange ───────────────────────────────────────────────────────────────
+
+_TRIL_KERNEL = '''extern "C" __global__ void k(
+    const float *input, float *output, unsigned int rows, unsigned int cols, int diagonal
+) {
+    unsigned int idx = blockIdx.x * blockDim.x + threadIdx.x;
+    if (idx >= rows * cols) return;
+    unsigned int r = idx / cols, c = idx % cols;
+    output[idx] = ((int)c <= (int)r + diagonal) ? input[idx] : 0.0f;
+}'''
+
+_reg("tril", kernel=_TRIL_KERNEL, inputs=_2d, dims={"d0": 16, "d1": 16},
+     aten=lambda inp: [torch.ops.aten.tril.default(inp[0]).flatten()],
+     dispatch=lambda inp, k: [k(inp[0], params=[
+         k.in_ptr(0), k.out_ptr(0),
+         np.uint32(inp[0].shape[0]), np.uint32(inp[0].shape[1]), np.int32(0)])],
+     outputs=lambda d: ["float32;n=%d" % (d["d0"]*d["d1"])],
+     grid=lambda d: ((d["d0"]*d["d1"]+255)//256,))
+
+_TRIU_KERNEL = '''extern "C" __global__ void k(
+    const float *input, float *output, unsigned int rows, unsigned int cols, int diagonal
+) {
+    unsigned int idx = blockIdx.x * blockDim.x + threadIdx.x;
+    if (idx >= rows * cols) return;
+    unsigned int r = idx / cols, c = idx % cols;
+    output[idx] = ((int)c >= (int)r + diagonal) ? input[idx] : 0.0f;
+}'''
+
+_reg("triu", kernel=_TRIU_KERNEL, inputs=_2d, dims={"d0": 16, "d1": 16},
+     aten=lambda inp: [torch.ops.aten.triu.default(inp[0]).flatten()],
+     dispatch=lambda inp, k: [k(inp[0], params=[
+         k.in_ptr(0), k.out_ptr(0),
+         np.uint32(inp[0].shape[0]), np.uint32(inp[0].shape[1]), np.int32(0)])],
+     outputs=lambda d: ["float32;n=%d" % (d["d0"]*d["d1"])],
+     grid=lambda d: ((d["d0"]*d["d1"]+255)//256,))
+
+_FLIP_KERNEL = '''extern "C" __global__ void k(
+    const float *input, float *output, unsigned int rows, unsigned int cols
+) {
+    unsigned int idx = blockIdx.x * blockDim.x + threadIdx.x;
+    if (idx >= rows * cols) return;
+    unsigned int r = idx / cols, c = idx % cols;
+    output[r * cols + (cols - 1 - c)] = input[idx];
+}'''
+
+_reg("flip", kernel=_FLIP_KERNEL, inputs=_2d, dims={"d0": 16, "d1": 32},
+     aten=lambda inp: [torch.ops.aten.flip.default(inp[0], [-1]).contiguous().flatten()],
+     dispatch=lambda inp, k: [k(inp[0], params=[
+         k.in_ptr(0), k.out_ptr(0),
+         np.uint32(inp[0].shape[0]), np.uint32(inp[0].shape[1])])],
+     outputs=lambda d: ["float32;n=%d" % (d["d0"]*d["d1"])],
+     grid=lambda d: ((d["d0"]*d["d1"]+255)//256,))
+
+# ─── Cumulative ──────────────────────────────────────────────────────────────
+
+_CUMSUM_KERNEL = '''extern "C" __global__ void k(
+    const float *input, float *output, unsigned int rows, unsigned int cols
+) {
+    unsigned int row = blockIdx.x;
+    if (row >= rows) return;
+    const float *ri = input + row * cols;
+    float *ro = output + row * cols;
+    float acc = 0.0f;
+    for (unsigned int j = 0; j < cols; j++) { acc += ri[j]; ro[j] = acc; }
+}'''
+
+_reg("cumsum", kernel=_CUMSUM_KERNEL, inputs=_2d, dims={"d0": 8, "d1": 64},
+     aten=lambda inp: [torch.ops.aten.cumsum.default(inp[0], -1).flatten()],
+     dispatch=_red_dispatch, atol=1e-4,
+     outputs=lambda d: ["float32;n=%d" % (d["d0"]*d["d1"])],
+     grid=lambda d: (d["d0"],), block=(1,))
+
+# ─── Sort / search ──────────────────────────────────────────────────────────
+
+_SORT_KERNEL = '''extern "C" __global__ void k(
+    const float *input, float *values, unsigned int rows, unsigned int cols
+) {
+    unsigned int row = blockIdx.x;
+    if (row >= rows) return;
+    const float *ri = input + row * cols;
+    float *rv = values + row * cols;
+    for (unsigned int j = 0; j < cols; j++) rv[j] = ri[j];
+    for (unsigned int i = 0; i < cols; i++)
+        for (unsigned int j = i + 1; j < cols; j++)
+            if (rv[j] < rv[i]) { float tmp = rv[i]; rv[i] = rv[j]; rv[j] = tmp; }
+}'''
+
+def _sort_inputs(dims, seed):
+    """Sort inputs without NaN (sort behavior on NaN is undefined)."""
+    d0, d1 = dims["d0"], dims["d1"]
+    if seed == 0:
+        v = torch.tensor([0.0, -0.0, 1.0, -1.0, 0.5, 2.0, 100.0, -100.0, 1e-7, 1e7], device="cuda")
+        return [v.repeat((d0*d1 + len(v) - 1) // len(v))[:d0*d1].reshape(d0, d1)]
+    return [_seeded((d0, d1), seed)]
+
+_reg("sort", kernel=_SORT_KERNEL, inputs=_sort_inputs, dims={"d0": 8, "d1": 32},
+     aten=lambda inp: [torch.ops.aten.sort.default(inp[0], -1)[0].flatten()],
+     dispatch=_red_dispatch,
+     outputs=lambda d: ["float32;n=%d" % (d["d0"]*d["d1"])],
+     grid=lambda d: (d["d0"],), block=(1,))
+
+# ─── Convolution ─────────────────────────────────────────────────────────────
+
+_CONV2D_KERNEL = '''extern "C" __global__ void k(
+    const float *input, const float *weight, const float *bias, float *output,
+    unsigned int N, unsigned int C_in, unsigned int H, unsigned int W,
+    unsigned int C_out, unsigned int kH, unsigned int kW,
+    unsigned int padH, unsigned int padW, unsigned int strideH, unsigned int strideW,
+    unsigned int outH, unsigned int outW
+) {
+    unsigned int idx = blockIdx.x * blockDim.x + threadIdx.x;
+    unsigned int total = N * C_out * outH * outW;
+    if (idx >= total) return;
+    unsigned int ow = idx % outW, oh = (idx / outW) % outH;
+    unsigned int oc = (idx / (outW * outH)) % C_out;
+    unsigned int n = idx / (outW * outH * C_out);
+    float sum = bias[oc];
+    for (unsigned int ic = 0; ic < C_in; ic++)
+        for (unsigned int kh = 0; kh < kH; kh++)
+            for (unsigned int kw = 0; kw < kW; kw++) {
+                int ih = (int)(oh * strideH + kh) - (int)padH;
+                int iw = (int)(ow * strideW + kw) - (int)padW;
+                if (ih >= 0 && ih < (int)H && iw >= 0 && iw < (int)W)
+                    sum += input[n*C_in*H*W + ic*H*W + ih*W + iw]
+                         * weight[oc*C_in*kH*kW + ic*kH*kW + kh*kW + kw];
+            }
+    output[idx] = sum;
+}'''
+
+_reg("convolution", kernel=_CONV2D_KERNEL,
+     dims={"N": 1, "C": 3, "H": 8, "W": 8, "Co": 4, "kH": 3, "kW": 3, "pad": 1, "stride": 1},
+     inputs=lambda d, s: [_seeded((d["N"],d["C"],d["H"],d["W"]), s),
+                           _seeded((d["Co"],d["C"],d["kH"],d["kW"]), s+100),
+                           _seeded((d["Co"],), s+200)],
+     aten=lambda inp: [torch.ops.aten.convolution.default(
+         inp[0], inp[1], inp[2], [1,1], [1,1], [1,1], False, [0,0], 1).flatten()],
+     dispatch=lambda inp, k: (lambda N,Ci,H,W,Co,kH,kW: [k(*inp, params=[
+         k.in_ptr(0), k.in_ptr(1), k.in_ptr(2), k.out_ptr(0),
+         np.uint32(N), np.uint32(Ci), np.uint32(H), np.uint32(W),
+         np.uint32(Co), np.uint32(kH), np.uint32(kW),
+         np.uint32(1), np.uint32(1), np.uint32(1), np.uint32(1),
+         np.uint32((H+2-kH)//1+1), np.uint32((W+2-kW)//1+1)])])(
+         *inp[0].shape, inp[1].shape[0], inp[1].shape[2], inp[1].shape[3]),
+     atol=1e-3,
+     outputs=lambda d: ["float32;n=%d" % (d["N"]*d["Co"]*((d["H"]+2*d["pad"]-d["kH"])//d["stride"]+1)*((d["W"]+2*d["pad"]-d["kW"])//d["stride"]+1))],
+     grid=lambda d: ((d["N"]*d["Co"]*((d["H"]+2*d["pad"]-d["kH"])//d["stride"]+1)*((d["W"]+2*d["pad"]-d["kW"])//d["stride"]+1)+255)//256,))
+
+# ─── Pooling ─────────────────────────────────────────────────────────────────
+
+_AVG_POOL2D_KERNEL = '''extern "C" __global__ void k(
+    const float *input, float *output,
+    unsigned int N, unsigned int C, unsigned int H, unsigned int W,
+    unsigned int kH, unsigned int kW, unsigned int strideH, unsigned int strideW,
+    unsigned int padH, unsigned int padW, unsigned int outH, unsigned int outW
+) {
+    unsigned int idx = blockIdx.x * blockDim.x + threadIdx.x;
+    unsigned int total = N * C * outH * outW;
+    if (idx >= total) return;
+    unsigned int ow = idx % outW, oh = (idx / outW) % outH;
+    unsigned int c = (idx / (outW * outH)) % C;
+    unsigned int n = idx / (outW * outH * C);
+    float sum = 0.0f; int count = 0;
+    for (unsigned int kh = 0; kh < kH; kh++)
+        for (unsigned int kw = 0; kw < kW; kw++) {
+            int ih = (int)(oh*strideH+kh)-(int)padH, iw = (int)(ow*strideW+kw)-(int)padW;
+            if (ih >= 0 && ih < (int)H && iw >= 0 && iw < (int)W) { sum += input[n*C*H*W + c*H*W + ih*W + iw]; count++; }
+        }
+    output[idx] = sum / (float)count;
+}'''
+
+_reg("avg_pool2d", kernel=_AVG_POOL2D_KERNEL,
+     dims={"N": 1, "C": 4, "H": 8, "W": 8, "kH": 2, "kW": 2, "sH": 2, "sW": 2, "pH": 0, "pW": 0},
+     inputs=lambda d, s: [_seeded((d["N"],d["C"],d["H"],d["W"]), s)],
+     aten=lambda inp: [torch.ops.aten.avg_pool2d.default(inp[0], [2,2], [2,2]).flatten()],
+     dispatch=lambda inp, k: (lambda N,C,H,W: [k(inp[0], params=[
+         k.in_ptr(0), k.out_ptr(0),
+         np.uint32(N), np.uint32(C), np.uint32(H), np.uint32(W),
+         np.uint32(2), np.uint32(2), np.uint32(2), np.uint32(2),
+         np.uint32(0), np.uint32(0), np.uint32(H//2), np.uint32(W//2)])])(*inp[0].shape),
+     outputs=lambda d: ["float32;n=%d" % (d["N"]*d["C"]*(d["H"]//2)*(d["W"]//2))],
+     grid=lambda d: ((d["N"]*d["C"]*(d["H"]//2)*(d["W"]//2)+255)//256,))
+
+# ─── Normalization (layer_norm, batch_norm) ──────────────────────────────────
+
+_LAYER_NORM_KERNEL = '''extern "C" __global__ void k(
+    const float *input, const float *weight, const float *bias,
+    float *output, unsigned int rows, unsigned int cols, float eps
+) {
+    __shared__ float s_sum[256], s_sq[256];
+    unsigned int row = blockIdx.x, tid = threadIdx.x;
+    if (row >= rows) return;
+    const float *ri = input + row * cols;
+    float *ro = output + row * cols;
+    float ls = 0.0f, lsq = 0.0f;
+    for (unsigned int j = tid; j < cols; j += blockDim.x) { float v = ri[j]; ls += v; lsq += v*v; }
+    s_sum[tid] = ls; s_sq[tid] = lsq; __syncthreads();
+    for (unsigned int s = blockDim.x/2; s > 0; s >>= 1) {
+        if (tid < s) { s_sum[tid] += s_sum[tid+s]; s_sq[tid] += s_sq[tid+s]; } __syncthreads();
+    }
+    float mean = s_sum[0] / (float)cols;
+    float rstd = rsqrtf(s_sq[0] / (float)cols - mean * mean + eps);
+    for (unsigned int j = tid; j < cols; j += blockDim.x)
+        ro[j] = (ri[j] - mean) * rstd * weight[j] + bias[j];
+}'''
+
+_reg("native_layer_norm", kernel=_LAYER_NORM_KERNEL,
+     dims={"d0": 8, "d1": 64},
+     inputs=lambda d, s: [_seeded((d["d0"],d["d1"]), s), _seeded((d["d1"],), s+100), _seeded((d["d1"],), s+200)],
+     aten=lambda inp: [torch.ops.aten.native_layer_norm.default(inp[0], [inp[0].shape[-1]], inp[1], inp[2], 1e-5)[0].flatten()],
+     dispatch=lambda inp, k: [k(*inp, params=[
+         k.in_ptr(0), k.in_ptr(1), k.in_ptr(2), k.out_ptr(0),
+         np.uint32(inp[0].shape[0]), np.uint32(inp[0].shape[1]), np.float32(1e-5)])],
+     atol=1e-4,
+     outputs=lambda d: ["float32;n=%d" % (d["d0"]*d["d1"])],
+     grid=lambda d: (d["d0"],), block=(256,))
+
+_BATCH_NORM_KERNEL = '''extern "C" __global__ void k(
+    const float *input, const float *weight, const float *bias,
+    const float *mean, const float *var, float *output,
+    unsigned int N, unsigned int C, unsigned int HW, float eps
+) {
+    unsigned int idx = blockIdx.x * blockDim.x + threadIdx.x;
+    if (idx >= N * C * HW) return;
+    unsigned int c = (idx / HW) % C;
+    output[idx] = (input[idx] - mean[c]) * rsqrtf(var[c] + eps) * weight[c] + bias[c];
+}'''
+
+_reg("native_batch_norm", kernel=_BATCH_NORM_KERNEL,
+     dims={"N": 2, "C": 8, "H": 4, "W": 4},
+     inputs=lambda d, s: [_seeded((d["N"],d["C"],d["H"],d["W"]), s), _seeded((d["C"],), s+100),
+                           _seeded((d["C"],), s+200), _seeded((d["C"],), s+300),
+                           _seeded_pos((d["C"],), s+400)],
+     aten=lambda inp: [torch.ops.aten.native_batch_norm.default(*inp, False, 0.1, 1e-5)[0].flatten()],
+     dispatch=lambda inp, k: (lambda N,C,H,W: [k(*inp, params=[
+         k.in_ptr(0), k.in_ptr(1), k.in_ptr(2), k.in_ptr(3), k.in_ptr(4), k.out_ptr(0),
+         np.uint32(N), np.uint32(C), np.uint32(H*W), np.float32(1e-5)])])(*inp[0].shape),
+     atol=1e-4,
+     outputs=lambda d: ["float32;n=%d" % (d["N"]*d["C"]*d["H"]*d["W"])],
+     grid=lambda d: ((d["N"]*d["C"]*d["H"]*d["W"]+255)//256,))
+
+# ─── Concat / slice ──────────────────────────────────────────────────────────
+
+_CAT_KERNEL = '''extern "C" __global__ void k(
+    const float *a, const float *b, float *out,
+    unsigned int a_rows, unsigned int b_rows, unsigned int cols
+) {
+    unsigned int idx = blockIdx.x * blockDim.x + threadIdx.x;
+    unsigned int total = (a_rows + b_rows) * cols;
+    if (idx >= total) return;
+    unsigned int r = idx / cols, c = idx % cols;
+    out[idx] = (r < a_rows) ? a[r*cols+c] : b[(r-a_rows)*cols+c];
+}'''
+
+_reg("cat", kernel=_CAT_KERNEL, dims={"d0": 8, "d1": 16, "d2": 32},
+     inputs=lambda d, s: [_seeded((d["d0"],d["d2"]), s), _seeded((d["d1"],d["d2"]), s+100)],
+     aten=lambda inp: [torch.ops.aten.cat.default([inp[0], inp[1]], 0).flatten()],
+     dispatch=lambda inp, k: [k(*inp, params=[
+         k.in_ptr(0), k.in_ptr(1), k.out_ptr(0),
+         np.uint32(inp[0].shape[0]), np.uint32(inp[1].shape[0]), np.uint32(inp[0].shape[1])])],
+     outputs=lambda d: ["float32;n=%d" % ((d["d0"]+d["d1"])*d["d2"])],
+     grid=lambda d: (((d["d0"]+d["d1"])*d["d2"]+255)//256,))
+
+# Slice, select, narrow, expand, repeat, roll, permute — use copy or simple kernels
+_SLICE_KERNEL = '''extern "C" __global__ void k(
+    const float *input, float *output, unsigned int cols, unsigned int start, unsigned int out_rows
+) {
+    unsigned int idx = blockIdx.x * blockDim.x + threadIdx.x;
+    if (idx >= out_rows * cols) return;
+    unsigned int r = idx / cols, c = idx % cols;
+    output[idx] = input[(start + r) * cols + c];
+}'''
+
+_reg("slice", kernel=_SLICE_KERNEL, inputs=_2d, dims={"d0": 32, "d1": 64},
+     aten=lambda inp: [torch.ops.aten.slice.Tensor(inp[0], 0, 4, 20).contiguous().flatten()],
+     dispatch=lambda inp, k: [k(inp[0], params=[
+         k.in_ptr(0), k.out_ptr(0), np.uint32(inp[0].shape[1]), np.uint32(4), np.uint32(16)])],
+     outputs=lambda d: ["float32;n=%d" % (16*d["d1"])],
+     grid=lambda d: ((16*d["d1"]+255)//256,))
+
+_SELECT_KERNEL = '''extern "C" __global__ void k(
+    const float *input, float *output, unsigned int cols, unsigned int index
+) {
+    unsigned int c = blockIdx.x * blockDim.x + threadIdx.x;
+    if (c < cols) output[c] = input[index * cols + c];
+}'''
+
+_reg("select", kernel=_SELECT_KERNEL, inputs=_2d, dims={"d0": 32, "d1": 64},
+     aten=lambda inp: [torch.ops.aten.select.int(inp[0], 0, 5).contiguous()],
+     dispatch=lambda inp, k: [k(inp[0], params=[
+         k.in_ptr(0), k.out_ptr(0), np.uint32(inp[0].shape[1]), np.uint32(5)])],
+     outputs=lambda d: ["float32;n=%d" % d["d1"]],
+     grid=lambda d: ((d["d1"]+255)//256,))
+
+_NARROW_KERNEL = '''extern "C" __global__ void k(
+    const float *input, float *output, unsigned int cols, unsigned int start, unsigned int length
+) {
+    unsigned int idx = blockIdx.x * blockDim.x + threadIdx.x;
+    if (idx >= length * cols) return;
+    unsigned int r = idx / cols, c = idx % cols;
+    output[idx] = input[(start + r) * cols + c];
+}'''
+
+_reg("narrow", kernel=_NARROW_KERNEL, inputs=_2d, dims={"d0": 32, "d1": 64},
+     aten=lambda inp: [torch.ops.aten.narrow.default(inp[0], 0, 4, 10).contiguous().flatten()],
+     dispatch=lambda inp, k: [k(inp[0], params=[
+         k.in_ptr(0), k.out_ptr(0), np.uint32(inp[0].shape[1]), np.uint32(4), np.uint32(10)])],
+     outputs=lambda d: ["float32;n=%d" % (10*d["d1"])],
+     grid=lambda d: ((10*d["d1"]+255)//256,))
+
+_EXPAND_KERNEL = '''extern "C" __global__ void k(
+    const float *input, float *output,
+    unsigned int in_rows, unsigned int in_cols, unsigned int out_rows, unsigned int out_cols
+) {
+    unsigned int idx = blockIdx.x * blockDim.x + threadIdx.x;
+    if (idx >= out_rows * out_cols) return;
+    unsigned int r = idx / out_cols, c = idx % out_cols;
+    output[idx] = input[(in_rows == 1 ? 0 : r) * in_cols + (in_cols == 1 ? 0 : c)];
+}'''
+
+_reg("expand", kernel=_EXPAND_KERNEL, dims={"d0": 1, "d1": 64, "d2": 32},
+     inputs=lambda d, s: [_seeded((d["d0"],d["d1"]), s)],
+     aten=lambda inp: [torch.ops.aten.expand.default(inp[0], [32, 64]).contiguous().flatten()],
+     dispatch=lambda inp, k: [k(inp[0], params=[
+         k.in_ptr(0), k.out_ptr(0), np.uint32(1), np.uint32(64), np.uint32(32), np.uint32(64)])],
+     outputs=lambda d: ["float32;n=%d" % (d["d2"]*d["d1"])],
+     grid=lambda d: ((d["d2"]*d["d1"]+255)//256,))
+
+_REPEAT_KERNEL = '''extern "C" __global__ void k(
+    const float *input, float *output,
+    unsigned int R, unsigned int C, unsigned int rr, unsigned int rc
+) {
+    unsigned int idx = blockIdx.x * blockDim.x + threadIdx.x;
+    unsigned int out_rows = R * rr, out_cols = C * rc;
+    if (idx >= out_rows * out_cols) return;
+    unsigned int r = idx / out_cols, c = idx % out_cols;
+    output[idx] = input[(r % R) * C + (c % C)];
+}'''
+
+_reg("repeat", kernel=_REPEAT_KERNEL, dims={"d0": 8, "d1": 16, "rr": 3, "rc": 2},
+     inputs=lambda d, s: [_seeded((d["d0"],d["d1"]), s)],
+     aten=lambda inp: [torch.ops.aten.repeat.default(inp[0], [3, 2]).contiguous().flatten()],
+     dispatch=lambda inp, k: [k(inp[0], params=[
+         k.in_ptr(0), k.out_ptr(0), np.uint32(8), np.uint32(16), np.uint32(3), np.uint32(2)])],
+     outputs=lambda d: ["float32;n=%d" % (d["d0"]*d["rr"]*d["d1"]*d["rc"])],
+     grid=lambda d: ((d["d0"]*d["rr"]*d["d1"]*d["rc"]+255)//256,))
+
+# ─── Padding ─────────────────────────────────────────────────────────────────
+
+_CONSTANT_PAD_KERNEL = '''extern "C" __global__ void k(
+    const float *input, float *output,
+    unsigned int H, unsigned int W, unsigned int outH, unsigned int outW,
+    unsigned int padTop, unsigned int padLeft, float value, unsigned int batch_stride
+) {
+    unsigned int idx = blockIdx.x * blockDim.x + threadIdx.x;
+    if (idx >= batch_stride) return;
+    unsigned int ow = idx % outW, oh = (idx / outW) % outH;
+    unsigned int n = idx / (outH * outW);
+    int ih = (int)oh - (int)padTop, iw = (int)ow - (int)padLeft;
+    output[idx] = (ih >= 0 && ih < (int)H && iw >= 0 && iw < (int)W)
+        ? input[n * H * W + ih * W + iw] : value;
+}'''
+
+_reg("constant_pad_nd", kernel=_CONSTANT_PAD_KERNEL,
+     dims={"N": 2, "H": 8, "W": 8, "pad": 1},
+     inputs=lambda d, s: [_seeded((d["N"],d["H"],d["W"]), s)],
+     aten=lambda inp: [torch.ops.aten.constant_pad_nd.default(inp[0], [1,1,1,1], 0.0).flatten()],
+     dispatch=lambda inp, k: (lambda N,H,W: [k(inp[0], params=[
+         k.in_ptr(0), k.out_ptr(0),
+         np.uint32(H), np.uint32(W), np.uint32(H+2), np.uint32(W+2),
+         np.uint32(1), np.uint32(1), np.float32(0), np.uint32(N*(H+2)*(W+2))])])(*inp[0].shape),
+     outputs=lambda d: ["float32;n=%d" % (d["N"]*(d["H"]+2*d["pad"])*(d["W"]+2*d["pad"]))],
+     grid=lambda d: ((d["N"]*(d["H"]+2*d["pad"])*(d["W"]+2*d["pad"])+255)//256,))
+
+# ─── Loss / MSE ──────────────────────────────────────────────────────────────
+
+_MSE_KERNEL = '''extern "C" __global__ void k(
+    const float *input, const float *target, float *output, unsigned int n
+) {
+    __shared__ float sdata[256];
+    unsigned int tid = threadIdx.x;
+    float v = 0.0f;
+    for (unsigned int i = tid; i < n; i += blockDim.x) {
+        float d = input[i] - target[i]; v += d * d;
+    }
+    sdata[tid] = v; __syncthreads();
+    for (unsigned int s = blockDim.x/2; s > 0; s >>= 1) {
+        if (tid < s) sdata[tid] += sdata[tid+s]; __syncthreads();
+    }
+    if (tid == 0) output[0] = sdata[0] / (float)n;
+}'''
+
+_reg("mse_loss", kernel=_MSE_KERNEL, dims={"n": 256},
+     inputs=_pair,
+     aten=lambda inp: [torch.ops.aten.mse_loss.default(*inp).unsqueeze(0)],
+     dispatch=lambda inp, k: [k(*inp, params=[
+         k.in_ptr(0), k.in_ptr(1), k.out_ptr(0), np.uint32(inp[0].numel())])],
+     atol=1e-4, outputs=lambda d: ["float32;n=1"], grid=lambda d: (1,), block=(256,))
+
+# ─── Attention ───────────────────────────────────────────────────────────────
+
+_SDPA_KERNEL = '''extern "C" __global__ void k(
+    const float *Q, const float *K, const float *V, float *output,
+    unsigned int B, unsigned int H, unsigned int S, unsigned int D
+) {
+    unsigned int idx = blockIdx.x * blockDim.x + threadIdx.x;
+    unsigned int total = B * H * S * D;
+    if (idx >= total) return;
+    unsigned int d = idx % D, s = (idx / D) % S;
+    unsigned int h = (idx / (D * S)) % H, b = idx / (D * S * H);
+    float scale = rsqrtf((float)D);
+    float max_qk = -1e38f;
+    for (unsigned int j = 0; j < S; j++) {
+        float qk = 0.0f;
+        for (unsigned int kk = 0; kk < D; kk++)
+            qk += Q[b*H*S*D + h*S*D + s*D + kk] * K[b*H*S*D + h*S*D + j*D + kk];
+        qk *= scale;
+        if (qk > max_qk) max_qk = qk;
+    }
+    float sum_exp = 0.0f, weighted_v = 0.0f;
+    for (unsigned int j = 0; j < S; j++) {
+        float qk = 0.0f;
+        for (unsigned int kk = 0; kk < D; kk++)
+            qk += Q[b*H*S*D + h*S*D + s*D + kk] * K[b*H*S*D + h*S*D + j*D + kk];
+        qk *= scale;
+        float w = expf(qk - max_qk);
+        sum_exp += w;
+        weighted_v += w * V[b*H*S*D + h*S*D + j*D + d];
+    }
+    output[idx] = weighted_v / sum_exp;
+}'''
+
+_reg("scaled_dot_product_attention", kernel=_SDPA_KERNEL,
+     dims={"B": 1, "H": 2, "S": 8, "D": 16},
+     inputs=lambda d, s: [_seeded((d["B"],d["H"],d["S"],d["D"]), s),
+                           _seeded((d["B"],d["H"],d["S"],d["D"]), s+100),
+                           _seeded((d["B"],d["H"],d["S"],d["D"]), s+200)],
+     aten=lambda inp: [torch.nn.functional.scaled_dot_product_attention(*inp).flatten()],
+     dispatch=lambda inp, k: [k(*inp, params=[
+         k.in_ptr(0), k.in_ptr(1), k.in_ptr(2), k.out_ptr(0),
+         np.uint32(inp[0].shape[0]), np.uint32(inp[0].shape[1]),
+         np.uint32(inp[0].shape[2]), np.uint32(inp[0].shape[3])])],
+     atol=1e-3,
+     outputs=lambda d: ["float32;n=%d" % (d["B"]*d["H"]*d["S"]*d["D"])],
+     grid=lambda d: ((d["B"]*d["H"]*d["S"]*d["D"]+255)//256,))
+
+# ─── Dropout ─────────────────────────────────────────────────────────────────
+
+_DROPOUT_KERNEL = '''extern "C" __global__ void k(
+    const float *input, const float *mask, float *output, float scale, unsigned int n
+) {
+    unsigned int i = blockIdx.x * blockDim.x + threadIdx.x;
+    if (i < n) output[i] = input[i] * mask[i] * scale;
+}'''
+
+_reg("native_dropout", kernel=_DROPOUT_KERNEL,
+     inputs=lambda d, s: [_seeded((d["n"],), s), (torch.rand(d["n"], device="cuda") > 0.5).float()],
+     aten=lambda inp: [inp[0] * inp[1] * 2.0],  # scale = 1/(1-0.5) = 2
+     dispatch=lambda inp, k: [k(*inp, params=[
+         k.in_ptr(0), k.in_ptr(1), k.out_ptr(0), np.float32(2.0), np.uint32(inp[0].numel())])])
+
 
 # ═════════════════════════════════════════════════════════════════════════════
 #  PUBLIC API — used by generated files and batch runner

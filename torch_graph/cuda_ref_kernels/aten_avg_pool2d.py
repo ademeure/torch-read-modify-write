@@ -45,8 +45,8 @@ def init_once():
     return {
         "kernel_source": KERNEL_SRC, "inputs": [x],
         "expected": [torch.ops.aten.avg_pool2d.default(x, [KH,KW], [SH,SW]).flatten()],
-        "outputs": ["float32;n=%d" % total],
-        "grid": ((total + 255) // 256,), "atol": 1e-5,
+        "outputs": ["float32;n=%d" % total], "atol": 1e-5,
+        "grid": ((total + 255) // 256,),
     }
 
 def run(inputs, kernel):

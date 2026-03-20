@@ -17,8 +17,7 @@ def init_once():
     return {
         "kernel_source": KERNEL_SRC, "inputs": [],
         "expected": [torch.ops.aten.arange.start_step(0, 100, 1, dtype=torch.float32, device='cuda')],
-        "outputs": ["float32;n=100"],
-        "grid": (1,),
+        "outputs": ["float32;n=100"], "grid": ((100 + 255) // 256,),
     }
 
 def run(inputs, kernel):

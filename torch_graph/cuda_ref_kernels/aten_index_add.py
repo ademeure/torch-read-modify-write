@@ -30,8 +30,8 @@ def init_once():
     return {
         "kernel_source": KERNEL_SRC, "inputs": [x, idx, src],
         "expected": [torch.ops.aten.index_add.default(x, 0, idx, src).flatten()],
-        "outputs": ["float32;n=%d" % total],
-        "grid": ((total + 255) // 256,), "atol": 1e-5,
+        "outputs": ["float32;n=%d" % total], "atol": 1e-5,
+        "grid": ((total + 255) // 256,),
     }
 
 def run(inputs, kernel):

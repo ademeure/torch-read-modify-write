@@ -27,8 +27,8 @@ def init_once():
     return {
         "kernel_source": KERNEL_SRC, "inputs": [A, x],
         "expected": [torch.ops.aten.mv.default(A, x)],
-        "outputs": ["float32;n=%d" % M],
-        "grid": ((M + 255) // 256,), "atol": 1e-3,
+        "outputs": ["float32;n=%d" % M], "atol": 1e-3,
+        "grid": ((M + 255) // 256,),
     }
 
 def run(inputs, kernel):

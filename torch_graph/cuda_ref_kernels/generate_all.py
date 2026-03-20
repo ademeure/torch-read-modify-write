@@ -27,119 +27,131 @@ HERE = Path(__file__).parent
 
 # ─── 1a. Elementwise unary (in0, out0, n) — standard kbox pattern ────────────
 
-UNARY_TEMPLATE = '''"""Reference CUDA kernel for aten.{op_name}.
-Run: kbox iterate torch_graph/cuda_ref_kernels/aten_{op_name}.py --once
-"""
+UNARY_TEMPLATE = '''"""Reference CUDA kernel for aten.{op_name}."""
 import torch
 
 KERNEL_SRC = r"""
 extern "C" __global__ void {func_name}(const float *in0, float *out0, unsigned int n) {{
     unsigned int i = blockIdx.x * blockDim.x + threadIdx.x;
-    if (i < n) {{
-        float x = in0[i];
-        out0[i] = {cuda_expr};
-    }}
+    if (i < n) {{ float x = in0[i]; out0[i] = {cuda_expr}; }}
 }}
 """
 
+ATOL = {atol_val}
+
+def make_inputs(n=1024, seed=1):
+    """seed=0 → special values (nan/inf/0/1/etc), seed>0 → seeded random."""
+    if seed == 0:
+        special = torch.tensor([0.0, -0.0, 1.0, -1.0, 0.5, 2.0, 4.0, 100.0, -100.0, 1e-7, 1e7, float("nan"), float("inf"), float("-inf")], device="cuda")
+        return [special.repeat((n + len(special) - 1) // len(special))[:n]]
+    g = torch.Generator(device="cuda").manual_seed(seed)
+    return [{test_input_seeded}]
+
+def expected(inputs):
+    x = inputs[0]
+    return [{aten_ref_fn}]
+
 def init_once():
-    x = {test_input}
-    return {{
-        "kernel_source": KERNEL_SRC,
-        "inputs": [x],
-        "expected": [{aten_ref}],{atol_str}
-    }}
+    inputs = make_inputs()
+    return {{"kernel_source": KERNEL_SRC, "inputs": inputs, "expected": expected(inputs), "atol": ATOL}}
 
 def run(inputs, kernel):
     return [kernel(*inputs)]
 '''
 
-# ─── 1b. Elementwise binary (in0, in1, out0, n) — standard kbox pattern ─────
+# ─── 1b. Elementwise binary (in0, in1, out0, n) ─────────────────────────────
 
-BINARY_TEMPLATE = '''"""Reference CUDA kernel for aten.{op_name}.
-Run: kbox iterate torch_graph/cuda_ref_kernels/aten_{op_name}.py --once
-"""
+BINARY_TEMPLATE = '''"""Reference CUDA kernel for aten.{op_name}."""
 import torch
 
 KERNEL_SRC = r"""
 extern "C" __global__ void {func_name}(const float *in0, const float *in1, float *out0, unsigned int n) {{
     unsigned int i = blockIdx.x * blockDim.x + threadIdx.x;
-    if (i < n) {{
-        float a = in0[i];
-        float b = in1[i];
-        out0[i] = {cuda_expr};
-    }}
+    if (i < n) {{ float a = in0[i], b = in1[i]; out0[i] = {cuda_expr}; }}
 }}
 """
 
+ATOL = {atol_val}
+
+def make_inputs(n=1024, seed=1):
+    if seed == 0:
+        special = torch.tensor([0.0, -0.0, 1.0, -1.0, 0.5, 2.0, 4.0, 100.0, -100.0, 1e-7, 1e7, float("nan"), float("inf"), float("-inf")], device="cuda")
+        s = special.repeat((n + len(special) - 1) // len(special))[:n]
+        return [s, s.flip(0)]
+    g = torch.Generator(device="cuda").manual_seed(seed)
+    {test_setup_seeded}
+    return [a, b]
+
+def expected(inputs):
+    a, b = inputs
+    return [{aten_ref_fn}]
+
 def init_once():
-    {test_setup}
-    return {{
-        "kernel_source": KERNEL_SRC,
-        "inputs": [a, b],
-        "expected": [{aten_ref}],{atol_str}
-    }}
+    inputs = make_inputs()
+    return {{"kernel_source": KERNEL_SRC, "inputs": inputs, "expected": expected(inputs), "atol": ATOL}}
 
 def run(inputs, kernel):
     return [kernel(*inputs)]
 '''
 
-# ─── 1c. Comparison (in0, in1, out0, n) — aten returns bool, kernel returns float ─
+# ─── 1c. Comparison (in0, in1, out0, n) ─────────────────────────────────────
 
-COMPARISON_TEMPLATE = '''"""Reference CUDA kernel for aten.{op_name}.
-Run: kbox iterate torch_graph/cuda_ref_kernels/aten_{op_name}.py --once
-"""
+COMPARISON_TEMPLATE = '''"""Reference CUDA kernel for aten.{op_name}."""
 import torch
 
 KERNEL_SRC = r"""
 extern "C" __global__ void {func_name}(const float *in0, const float *in1, float *out0, unsigned int n) {{
     unsigned int i = blockIdx.x * blockDim.x + threadIdx.x;
-    if (i < n) {{
-        float a = in0[i];
-        float b = in1[i];
-        out0[i] = {cuda_expr};
-    }}
+    if (i < n) {{ float a = in0[i], b = in1[i]; out0[i] = {cuda_expr}; }}
 }}
 """
 
+def make_inputs(n=1024, seed=1):
+    if seed == 0:
+        special = torch.tensor([0.0, -0.0, 1.0, -1.0, 0.5, 2.0, 100.0, -100.0, float("nan"), float("inf"), float("-inf")], device="cuda")
+        s = special.repeat((n + len(special) - 1) // len(special))[:n]
+        return [s, s.flip(0)]
+    g = torch.Generator(device="cuda").manual_seed(seed)
+    return [torch.randn(n, device="cuda", generator=g), torch.randn(n, device="cuda", generator=g)]
+
+def expected(inputs):
+    a, b = inputs
+    return [{aten_ref_fn}.float()]
+
 def init_once():
-    a = torch.randn(1024, device='cuda')
-    b = torch.randn(1024, device='cuda')
-    return {{
-        "kernel_source": KERNEL_SRC,
-        "inputs": [a, b],
-        "expected": [{aten_ref}.float()],
-    }}
+    inputs = make_inputs()
+    return {{"kernel_source": KERNEL_SRC, "inputs": inputs, "expected": expected(inputs)}}
 
 def run(inputs, kernel):
     return [kernel(*inputs)]
 '''
 
-# ─── 1d. Backward gradient (grad, saved, out0, n) — standard kbox pattern ───
+# ─── 1d. Backward gradient (grad, saved, out0, n) ───────────────────────────
 
-BACKWARD_TEMPLATE = '''"""Reference CUDA kernel for aten.{op_name} (backward gradient op).
-Run: kbox iterate torch_graph/cuda_ref_kernels/aten_{op_name}.py --once
-"""
+BACKWARD_TEMPLATE = '''"""Reference CUDA kernel for aten.{op_name} (backward gradient op)."""
 import torch
 
 KERNEL_SRC = r"""
 extern "C" __global__ void {func_name}(const float *grad, const float *saved, float *out0, unsigned int n) {{
     unsigned int i = blockIdx.x * blockDim.x + threadIdx.x;
-    if (i < n) {{
-        float g = grad[i];
-        float s = saved[i];
-        out0[i] = {cuda_expr};
-    }}
+    if (i < n) {{ float g = grad[i], s = saved[i]; out0[i] = {cuda_expr}; }}
 }}
 """
 
+ATOL = {atol_val}
+
+def make_inputs(n=1024, seed=1):
+    g = torch.Generator(device="cuda").manual_seed(seed)
+    {test_setup_seeded}
+    return [grad, saved]
+
+def expected(inputs):
+    grad, saved = inputs
+    return [{aten_ref_fn}]
+
 def init_once():
-    {test_setup}
-    return {{
-        "kernel_source": KERNEL_SRC,
-        "inputs": [grad, saved],
-        "expected": [{aten_ref}],{atol_str}
-    }}
+    inputs = make_inputs()
+    return {{"kernel_source": KERNEL_SRC, "inputs": inputs, "expected": expected(inputs), "atol": ATOL}}
 
 def run(inputs, kernel):
     return [kernel(*inputs)]
@@ -700,7 +712,7 @@ def init_once():
     return {
         "kernel_source": KERNEL_SRC, "inputs": [a, b],
         "expected": [torch.ops.aten.dot.default(a, b).reshape(1)],
-        "outputs": ["float32;n=1"],
+        "outputs": ["float32;n=1"], "grid": ((1 + 255) // 256,),
         "grid": (1,),
         "block": (256,), "atol": 1e-3,
     }
@@ -743,6 +755,7 @@ def init_once():
         "kernel_source": KERNEL_SRC, "inputs": [A, x],
         "expected": [torch.ops.aten.mv.default(A, x)],
         "outputs": ["float32;n=%d" % M], "atol": 1e-3,
+        "grid": ((M + 255) // 256,),
     }
 
 def run(inputs, kernel):
@@ -1083,6 +1096,7 @@ def init_once():
         "kernel_source": KERNEL_SRC, "inputs": [x.contiguous(), w, b, rm, rv],
         "expected": [torch.ops.aten.native_batch_norm.default(x, w, b, rm, rv, False, 0.1, 1e-5)[0].flatten()],
         "outputs": ["float32;n=%d" % total], "atol": 1e-4,
+        "grid": ((total + 255) // 256,),
     }
 
 def run(inputs, kernel):
@@ -1281,6 +1295,7 @@ def init_once():
         "kernel_source": KERNEL_SRC, "inputs": [x],
         "expected": [torch.ops.aten.permute.default(x, [2, 0, 1]).contiguous().flatten()],
         "outputs": ["float32;n=%d" % total],
+        "grid": ((total + 255) // 256,),
     }
 
 def run(inputs, kernel):
@@ -1377,6 +1392,7 @@ def init_once():
         "kernel_source": KERNEL_SRC, "inputs": [x],
         "expected": [torch.ops.aten.expand.default(x, [32, 64]).contiguous().flatten()],
         "outputs": ["float32;n=%d" % total],
+        "grid": ((total + 255) // 256,),
     }
 
 def run(inputs, kernel):
@@ -1418,6 +1434,7 @@ def init_once():
         "kernel_source": KERNEL_SRC, "inputs": [x],
         "expected": [torch.ops.aten.slice.Tensor(x, 0, 4, 20).contiguous().flatten()],
         "outputs": ["float32;n=%d" % total],
+        "grid": ((total + 255) // 256,),
     }
 
 def run(inputs, kernel):
@@ -1448,7 +1465,7 @@ def init_once():
     return {
         "kernel_source": KERNEL_SRC, "inputs": [x],
         "expected": [torch.ops.aten.select.int(x, 0, 5).contiguous().flatten()],
-        "outputs": ["float32;n=64"],
+        "outputs": ["float32;n=64"], "grid": ((64 + 255) // 256,),
     }
 
 def run(inputs, kernel):
@@ -1483,6 +1500,7 @@ def init_once():
         "kernel_source": KERNEL_SRC, "inputs": [x],
         "expected": [torch.ops.aten.narrow.default(x, 0, 4, 10).contiguous().flatten()],
         "outputs": ["float32;n=%d" % total],
+        "grid": ((total + 255) // 256,),
     }
 
 def run(inputs, kernel):
@@ -1519,6 +1537,7 @@ def init_once():
         "kernel_source": KERNEL_SRC, "inputs": [x],
         "expected": [torch.ops.aten.flip.default(x, [-1]).contiguous().flatten()],
         "outputs": ["float32;n=%d" % (ROWS * COLS)],
+        "grid": (((ROWS * COLS) + 255) // 256,),
     }
 
 def run(inputs, kernel):
@@ -1588,6 +1607,7 @@ def init_once():
         "kernel_source": KERNEL_SRC, "inputs": [x],
         "expected": [torch.ops.aten.repeat.default(x, [RR, RC]).contiguous().flatten()],
         "outputs": ["float32;n=%d" % total],
+        "grid": ((total + 255) // 256,),
     }
 
 def run(inputs, kernel):
@@ -1686,7 +1706,7 @@ def init_once():
     return {
         "kernel_source": KERNEL_SRC, "inputs": [],
         "expected": [torch.ops.aten.arange.start_step(0, 100, 1, dtype=torch.float32, device='cuda')],
-        "outputs": ["float32;n=100"],
+        "outputs": ["float32;n=100"], "grid": ((100 + 255) // 256,),
     }
 
 def run(inputs, kernel):
@@ -1714,6 +1734,7 @@ def init_once():
         "kernel_source": KERNEL_SRC, "inputs": [],
         "expected": [torch.zeros(32, 64, device='cuda').flatten()],
         "outputs": ["float32;n=%d" % (32 * 64)],
+        "grid": (((32 * 64) + 255) // 256,),
     }
 
 def run(inputs, kernel):
@@ -1740,6 +1761,7 @@ def init_once():
         "kernel_source": KERNEL_SRC, "inputs": [],
         "expected": [torch.ones(32, 64, device='cuda').flatten()],
         "outputs": ["float32;n=%d" % (32 * 64)],
+        "grid": (((32 * 64) + 255) // 256,),
     }
 
 def run(inputs, kernel):
@@ -1766,6 +1788,7 @@ def init_once():
         "kernel_source": KERNEL_SRC, "inputs": [],
         "expected": [torch.full((32, 64), 3.14, device='cuda').flatten()],
         "outputs": ["float32;n=%d" % (32 * 64)],
+        "grid": (((32 * 64) + 255) // 256,),
     }
 
 def run(inputs, kernel):
@@ -1796,6 +1819,7 @@ def init_once():
         "kernel_source": KERNEL_SRC, "inputs": [],
         "expected": [torch.eye(N, device='cuda').flatten()],
         "outputs": ["float32;n=%d" % (N * N)],
+        "grid": (((N * N) + 255) // 256,),
     }
 
 def run(inputs, kernel):
@@ -1823,7 +1847,7 @@ def init_once():
     return {
         "kernel_source": KERNEL_SRC, "inputs": [],
         "expected": [torch.linspace(0, 1, 100, device='cuda')],
-        "outputs": ["float32;n=100"], "atol": 1e-5,
+        "outputs": ["float32;n=100"], "grid": ((100 + 255) // 256,), "atol": 1e-5,
     }
 
 def run(inputs, kernel):
@@ -1890,6 +1914,7 @@ def init_once():
         "kernel_source": KERNEL_SRC, "inputs": [x, idx],
         "expected": [torch.ops.aten.gather.default(x, 1, idx).flatten()],
         "outputs": ["float32;n=%d" % total],
+        "grid": ((total + 255) // 256,),
     }
 
 def run(inputs, kernel):
@@ -1935,6 +1960,7 @@ def init_once():
         "kernel_source": KERNEL_SRC, "inputs": [x, idx, src],
         "expected": [torch.ops.aten.scatter.src(x, 1, idx, src).flatten()],
         "outputs": ["float32;n=%d" % total],
+        "grid": ((total + 255) // 256,),
     }
 
 def run(inputs, kernel):
@@ -1974,6 +2000,7 @@ def init_once():
         "kernel_source": KERNEL_SRC, "inputs": [x, idx],
         "expected": [torch.ops.aten.index_select.default(x, 0, idx).flatten()],
         "outputs": ["float32;n=%d" % total],
+        "grid": ((total + 255) // 256,),
     }
 
 def run(inputs, kernel):
@@ -2019,6 +2046,7 @@ def init_once():
         "kernel_source": KERNEL_SRC, "inputs": [x, idx, src],
         "expected": [torch.ops.aten.index_add.default(x, 0, idx, src).flatten()],
         "outputs": ["float32;n=%d" % total], "atol": 1e-5,
+        "grid": ((total + 255) // 256,),
     }
 
 def run(inputs, kernel):
@@ -2063,6 +2091,7 @@ def init_once():
         "kernel_source": KERNEL_SRC, "inputs": [a, b],
         "expected": [torch.ops.aten.cat.default([a, b], 0).flatten()],
         "outputs": ["float32;n=%d" % total],
+        "grid": ((total + 255) // 256,),
     }
 
 def run(inputs, kernel):
@@ -2097,7 +2126,7 @@ def init_once():
     return {
         "kernel_source": KERNEL_SRC, "inputs": [a, b],
         "expected": [torch.ops.aten.stack.default([a, b], 0).flatten()],
-        "outputs": ["float32;n=128"],
+        "outputs": ["float32;n=128"], "grid": ((128 + 255) // 256,),
     }
 
 def run(inputs, kernel):
@@ -2132,6 +2161,7 @@ def init_once():
         "kernel_source": KERNEL_SRC, "inputs": [x],
         "expected": [chunk.flatten()],
         "outputs": ["float32;n=%d" % total],
+        "grid": ((total + 255) // 256,),
     }
 
 def run(inputs, kernel):
@@ -2488,6 +2518,7 @@ def init_once():
         "kernel_source": KERNEL_SRC, "inputs": [weight, indices],
         "expected": [torch.ops.aten.embedding.default(weight, indices).flatten()],
         "outputs": ["float32;n=%d" % total],
+        "grid": ((total + 255) // 256,),
     }
 
 def run(inputs, kernel):
@@ -2554,6 +2585,7 @@ def init_once():
         "kernel_source": KERNEL_SRC, "inputs": [x.contiguous(), w.contiguous(), b],
         "expected": [torch.ops.aten.convolution.default(x, w, b, [STRIDE,STRIDE], [PAD,PAD], [1,1], False, [0,0], 1).flatten()],
         "outputs": ["float32;n=%d" % total], "atol": 1e-3,
+        "grid": ((total + 255) // 256,),
     }
 
 def run(inputs, kernel):
@@ -2616,6 +2648,7 @@ def init_once():
         "kernel_source": KERNEL_SRC, "inputs": [x],
         "expected": [torch.ops.aten.max_pool2d_with_indices.default(x, [KH,KW], [SH,SW])[0].flatten()],
         "outputs": ["float32;n=%d" % total],
+        "grid": ((total + 255) // 256,),
     }
 
 def run(inputs, kernel):
@@ -2676,6 +2709,7 @@ def init_once():
         "kernel_source": KERNEL_SRC, "inputs": [x],
         "expected": [torch.ops.aten.avg_pool2d.default(x, [KH,KW], [SH,SW]).flatten()],
         "outputs": ["float32;n=%d" % total], "atol": 1e-5,
+        "grid": ((total + 255) // 256,),
     }
 
 def run(inputs, kernel):
@@ -2733,6 +2767,7 @@ def init_once():
         "kernel_source": KERNEL_SRC, "inputs": [x],
         "expected": [torch.ops.aten.adaptive_avg_pool2d.default(x, [OUT_H, OUT_W]).flatten()],
         "outputs": ["float32;n=%d" % total], "atol": 1e-4,
+        "grid": ((total + 255) // 256,),
     }
 
 def run(inputs, kernel):
@@ -2775,7 +2810,7 @@ def init_once():
     return {
         "kernel_source": KERNEL_SRC, "inputs": [log_probs, target],
         "expected": [torch.ops.aten.nll_loss_forward.default(log_probs, target, None, 1, -100)[0].reshape(1)],
-        "outputs": ["float32;n=1"],
+        "outputs": ["float32;n=1"], "grid": ((1 + 255) // 256,),
         "grid": (1,),
         "block": (1,), "atol": 1e-4,
     }
@@ -2821,7 +2856,7 @@ def init_once():
     return {
         "kernel_source": KERNEL_SRC, "inputs": [x, y],
         "expected": [torch.ops.aten.mse_loss.default(x, y).reshape(1)],
-        "outputs": ["float32;n=1"],
+        "outputs": ["float32;n=1"], "grid": ((1 + 255) // 256,),
         "grid": (1,),
         "block": (256,), "atol": 1e-4,
     }
@@ -2889,6 +2924,7 @@ def init_once():
         "kernel_source": KERNEL_SRC, "inputs": [Q, K, V],
         "expected": [torch.nn.functional.scaled_dot_product_attention(Q, K, V).flatten()],
         "outputs": ["float32;n=%d" % total], "atol": 1e-3,
+        "grid": ((total + 255) // 256,),
     }
 
 def run(inputs, kernel):
@@ -2974,6 +3010,7 @@ def init_once():
         "kernel_source": KERNEL_SRC, "inputs": [x],
         "expected": [torch.ops.aten.constant_pad_nd.default(x, [PAD, PAD, PAD, PAD], 0.0).flatten()],
         "outputs": ["float32;n=%d" % total],
+        "grid": ((total + 255) // 256,),
     }
 
 def run(inputs, kernel):
@@ -3017,35 +3054,61 @@ def run(inputs):
 def generate():
     count = 0
 
-    # Templated ops
+    # Templated ops — auto-convert old format to new
+    def _to_seeded_input(test_input):
+        """Convert 'torch.randn(1024, device='cuda')' to seeded version."""
+        s = test_input.replace("1024", "n")
+        if "torch.randn(n" in s:
+            s = s.replace("torch.randn(n, device='cuda')", 'torch.randn(n, device="cuda", generator=g)')
+        if "torch.rand(n" in s:
+            s = s.replace("torch.rand(n, device='cuda')", 'torch.rand(n, device="cuda", generator=g)')
+        if "torch.tensor" in s:
+            return test_input  # keep as-is for fixed tensors
+        return s
+
+    def _to_ref_fn(aten_ref, var="x"):
+        """Convert 'torch.ops.aten.abs.default(x)' to use inputs[0]."""
+        return aten_ref.replace(f"({var})", "(inputs[0])").replace(f"({var},", "(inputs[0],")
+
+    def _to_ref_fn2(aten_ref):
+        """Convert binary ref to use a, b from inputs."""
+        return aten_ref.replace("(a, b)", "(a, b)").replace("(a,", "(a,")  # already uses a, b
+
     for op_name, func_name, cuda_expr, test_input, aten_ref, atol in UNARY_OPS:
-        atol_str = f'\n        "atol": {atol},' if atol else ""
         content = UNARY_TEMPLATE.format(
             op_name=op_name, func_name=func_name, cuda_expr=cuda_expr,
-            test_input=test_input, aten_ref=aten_ref, atol_str=atol_str)
+            test_input_seeded=_to_seeded_input(test_input),
+            aten_ref_fn=_to_ref_fn(aten_ref),
+            atol_val=atol if atol else "1e-5")
         (HERE / f"aten_{op_name}.py").write_text(content)
         count += 1
 
+    def _to_seeded_setup(test_setup):
+        """Convert binary test_setup to use generator g."""
+        return test_setup.replace("device='cuda')", 'device="cuda", generator=g)')
+
     for op_name, func_name, cuda_expr, test_setup, aten_ref, atol in BINARY_OPS:
-        atol_str = f'\n        "atol": {atol},' if atol else ""
         content = BINARY_TEMPLATE.format(
             op_name=op_name, func_name=func_name, cuda_expr=cuda_expr,
-            test_setup=test_setup, aten_ref=aten_ref, atol_str=atol_str)
+            test_setup_seeded=_to_seeded_setup(test_setup),
+            aten_ref_fn=aten_ref,  # already uses a, b
+            atol_val=atol if atol else "1e-5")
         (HERE / f"aten_{op_name}.py").write_text(content)
         count += 1
 
     for op_name, func_name, cuda_expr, aten_ref in COMPARISON_OPS:
         content = COMPARISON_TEMPLATE.format(
             op_name=op_name, func_name=func_name, cuda_expr=cuda_expr,
-            aten_ref=aten_ref)
+            aten_ref_fn=aten_ref)  # already uses a, b
         (HERE / f"aten_{op_name}.py").write_text(content)
         count += 1
 
     for op_name, func_name, cuda_expr, test_setup, aten_ref, atol in BACKWARD_OPS:
-        atol_str = f'\n        "atol": {atol},' if atol else ""
         content = BACKWARD_TEMPLATE.format(
             op_name=op_name, func_name=func_name, cuda_expr=cuda_expr,
-            test_setup=test_setup, aten_ref=aten_ref, atol_str=atol_str)
+            test_setup_seeded=_to_seeded_setup(test_setup),
+            aten_ref_fn=aten_ref,  # already uses grad, saved
+            atol_val=atol if atol else "1e-5")
         (HERE / f"aten_{op_name}.py").write_text(content)
         count += 1
 

@@ -27,7 +27,7 @@ def init_once():
     return {
         "kernel_source": KERNEL_SRC, "inputs": [log_probs, target],
         "expected": [torch.ops.aten.nll_loss_forward.default(log_probs, target, None, 1, -100)[0].reshape(1)],
-        "outputs": ["float32;n=1"],
+        "outputs": ["float32;n=1"], "grid": ((1 + 255) // 256,),
         "grid": (1,),
         "block": (1,), "atol": 1e-4,
     }

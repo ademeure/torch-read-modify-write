@@ -45,7 +45,11 @@ def _load_test_module(path):
 
 
 def _verify(result, expected, atol, rtol):
-    """Compare result tensors to expected. Returns (ok, message)."""
+    """Compare result tensors to expected. Returns (ok, message).
+
+    Handles NaN: NaN in both result and expected at the same position = match.
+    Handles Inf: must match sign.
+    """
     import torch
     if not isinstance(result, (list, tuple)):
         result = [result]
@@ -61,9 +65,19 @@ def _verify(result, expected, atol, rtol):
             if not torch.equal(rf, ef):
                 return False, f"output[{i}]: int/bool mismatch"
         else:
-            diff = (rf - ef).abs().max().item()
-            if not torch.allclose(rf, ef, atol=atol, rtol=rtol):
-                return False, f"output[{i}]: max_err={diff:.2e} (atol={atol})"
+            # Mask out positions where both are NaN (those are correct)
+            both_nan = torch.isnan(rf) & torch.isnan(ef)
+            # Check NaN mismatches: one is NaN but not the other
+            nan_mismatch = torch.isnan(rf) != torch.isnan(ef)
+            if nan_mismatch.any():
+                idx = nan_mismatch.nonzero(as_tuple=True)[0][0].item()
+                return False, f"output[{i}]: NaN mismatch at [{idx}] (got={rf[idx]}, expected={ef[idx]})"
+            # Compare non-NaN values
+            mask = ~both_nan
+            if mask.any():
+                diff = (rf[mask] - ef[mask]).abs().max().item()
+                if not torch.allclose(rf[mask], ef[mask], atol=atol, rtol=rtol):
+                    return False, f"output[{i}]: max_err={diff:.2e} (atol={atol})"
     return True, "ok"
 
 
@@ -77,6 +91,8 @@ def main():
     p.add_argument("--atol", type=float, default=1e-5)
     p.add_argument("--rtol", type=float, default=1e-5)
     p.add_argument("--filter", default=None, help="Only run tests matching this substring")
+    p.add_argument("--seeds", type=int, default=1,
+                   help="Number of random seeds to test per op (seed 0 = special values). Default: 1")
     args = p.parse_args()
 
     directory = os.path.abspath(args.directory)
@@ -127,12 +143,7 @@ def main():
                 print(f"FAIL {name}: init must return dict", flush=True)
                 continue
 
-            inputs = state.get("inputs", [])
-            expected = state.get("expected", [])
-            atol = state.get("atol", args.atol)
-            rtol = state.get("rtol", args.rtol)
             run_fn = getattr(mod, "run", None)
-
             if run_fn is None:
                 failed += 1
                 failures.append((name, "no run"))
@@ -142,6 +153,7 @@ def main():
             sig = inspect.signature(run_fn)
             needs_kernel = len(sig.parameters) >= 2
 
+            # Reconfigure session once per op (kernel source doesn't change per seed)
             if needs_kernel and "kernel_source" in state:
                 session.reconfigure(
                     kernel_source=state["kernel_source"],
@@ -150,21 +162,52 @@ def main():
                     block=state.get("block"),
                     smem=state.get("smem"),
                 )
-                result = run_fn(inputs, session)
-            elif needs_kernel:
-                skipped += 1
-                continue
-            else:
-                result = run_fn(inputs)
 
-            ok, msg = _verify(result, expected, atol, rtol)
-            if ok:
+            # Determine seeds to test
+            has_make_inputs = hasattr(mod, "make_inputs")
+            has_expected_fn = hasattr(mod, "expected")
+            num_seeds = args.seeds if (has_make_inputs and has_expected_fn) else 1
+
+            # seeds: 0=special, 1..N=random
+            seeds = list(range(num_seeds)) if num_seeds > 1 else [1]
+            atol = state.get("atol", args.atol)
+            rtol = state.get("rtol", args.rtol)
+
+            all_ok = True
+            fail_msg = ""
+            for seed in seeds:
+                if has_make_inputs and has_expected_fn:
+                    inputs = mod.make_inputs(seed=seed)
+                    exp = mod.expected(inputs)
+                else:
+                    inputs = state.get("inputs", [])
+                    exp = state.get("expected", [])
+
+                if needs_kernel and "kernel_source" in state:
+                    result = run_fn(inputs, session)
+                elif needs_kernel:
+                    skipped += 1
+                    all_ok = None
+                    break
+                else:
+                    result = run_fn(inputs)
+
+                ok, msg = _verify(result, exp, atol, rtol)
+                if not ok:
+                    all_ok = False
+                    fail_msg = f"seed={seed}: {msg}"
+                    break
+
+            if all_ok is None:
+                continue  # skipped
+            elif all_ok:
+                label = f"({num_seeds} seeds)" if num_seeds > 1 else ""
                 passed += 1
-                print(f"PASS {name}", flush=True)
+                print(f"PASS {name} {label}", flush=True)
             else:
                 failed += 1
-                failures.append((name, msg))
-                print(f"FAIL {name}: {msg}", flush=True)
+                failures.append((name, fail_msg))
+                print(f"FAIL {name}: {fail_msg}", flush=True)
 
         except Exception as ex:
             failed += 1

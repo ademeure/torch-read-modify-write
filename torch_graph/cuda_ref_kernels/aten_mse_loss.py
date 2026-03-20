@@ -31,7 +31,7 @@ def init_once():
     return {
         "kernel_source": KERNEL_SRC, "inputs": [x, y],
         "expected": [torch.ops.aten.mse_loss.default(x, y).reshape(1)],
-        "outputs": ["float32;n=1"],
+        "outputs": ["float32;n=1"], "grid": ((1 + 255) // 256,),
         "grid": (1,),
         "block": (256,), "atol": 1e-4,
     }

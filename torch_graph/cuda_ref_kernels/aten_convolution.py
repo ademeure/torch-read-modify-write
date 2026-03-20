@@ -49,8 +49,8 @@ def init_once():
     return {
         "kernel_source": KERNEL_SRC, "inputs": [x.contiguous(), w.contiguous(), b],
         "expected": [torch.ops.aten.convolution.default(x, w, b, [STRIDE,STRIDE], [PAD,PAD], [1,1], False, [0,0], 1).flatten()],
-        "outputs": ["float32;n=%d" % total],
-        "grid": ((total + 255) // 256,), "atol": 1e-3,
+        "outputs": ["float32;n=%d" % total], "atol": 1e-3,
+        "grid": ((total + 255) // 256,),
     }
 
 def run(inputs, kernel):

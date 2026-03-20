@@ -18,8 +18,7 @@ def init_once():
     return {
         "kernel_source": KERNEL_SRC, "inputs": [x],
         "expected": [torch.ops.aten.select.int(x, 0, 5).contiguous().flatten()],
-        "outputs": ["float32;n=64"],
-        "grid": (1,),
+        "outputs": ["float32;n=64"], "grid": ((64 + 255) // 256,),
     }
 
 def run(inputs, kernel):

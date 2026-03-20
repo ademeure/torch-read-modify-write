@@ -2557,25 +2557,25 @@ def _generate_call_site(
     inp_map = group.input_name_map[instance_idx]
     out_map = group.output_name_map[instance_idx]
 
-    # Build output tuple
+    # Build output unpacking — one name per line for readability
     if group.returns:
         out_names = list(out_map.values())
-        lhs = f"({', '.join(out_names)},)"
+        if len(out_names) <= 3:
+            lhs = f"({', '.join(out_names)},)"
+            lines.append(f"    {lhs} = {group.fn_name}(")
+        else:
+            lines.append(f"    (")
+            for name in out_names:
+                lines.append(f"        {name},")
+            lines.append(f"    ) = {group.fn_name}(")
     else:
-        lhs = None
+        lines.append(f"    {group.fn_name}(")
 
-    # Build keyword call
-    call_args: list[str] = []
+    # Keyword arguments
     for p in group.params:
         param_name = p["name"]
         actual = inp_map.get(param_name, param_name)
-        call_args.append(f"        {param_name}={actual},")
-
-    if lhs:
-        lines.append(f"    {lhs} = {group.fn_name}(")
-    else:
-        lines.append(f"    {group.fn_name}(")
-    lines.extend(call_args)
+        lines.append(f"        {param_name}={actual},")
     lines.append("    )")
 
     return lines

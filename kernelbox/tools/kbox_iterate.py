@@ -105,6 +105,8 @@ examples:
                    help="Use dirty (read+write) L2 flush instead of read-only")
     p.add_argument("--isolated-kernel-benchmark", action="store_true",
                    help="Run kernel_mode() planning in a one-shot isolated subprocess")
+    p.add_argument("--fuzz", type=int, default=0, metavar="N",
+                   help="Auto-fuzz with N random+special seeds (requires reference() in test file)")
 
     args = p.parse_args()
 
@@ -123,7 +125,8 @@ examples:
                timeout=args.timeout, l2_flush=args.l2_flush,
                l2_flush_per_iter=args.l2_flush_per_iter,
                l2_dirty=args.l2_dirty,
-               isolated_kernel_benchmark=args.isolated_kernel_benchmark)
+               isolated_kernel_benchmark=args.isolated_kernel_benchmark,
+               fuzz_seeds=args.fuzz)
 
 
 if __name__ == "__main__":

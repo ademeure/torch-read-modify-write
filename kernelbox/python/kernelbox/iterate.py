@@ -1076,7 +1076,7 @@ def watch_file(test_path, atol=1e-5, rtol=1e-5, interval=0.3, dump=None,
                dump_mode=None, once=False, bench=False, warmup=10, iters=None,
                benchtime=None, timeout=None, l2_flush=None,
                l2_flush_per_iter=None, l2_dirty=False,
-               isolated_kernel_benchmark=False):
+               isolated_kernel_benchmark=False, fuzz_seeds=0):
     """Load a test file once, then iterate on every change.
 
     Test file hooks (mutually exclusive init):
@@ -1234,6 +1234,36 @@ def watch_file(test_path, atol=1e-5, rtol=1e-5, interval=0.3, dump=None,
                 rt["post_fn"](outputs, rt["state"])
             except Exception as e:
                 _log(f"post() error: {e}", _RED + _BOLD)
+
+        # Auto-fuzz: if baseline passed and module has reference(), test variants
+        if ok and fuzz_seeds and suite is None:
+            ref_fn = getattr(rt["mod"], "reference", None)
+            if ref_fn is not None and isinstance(inputs, (list, tuple)):
+                from .fuzz import fuzz_inputs
+                fuzz_pass = fuzz_fail = 0
+                for label, variant in fuzz_inputs(inputs, seeds=fuzz_seeds):
+                    try:
+                        fuzz_expected = ref_fn(variant)
+                        snap = _snapshot_inputs(variant) if restore else None
+                        fuzz_result = run_fn(variant)
+                        if snap is not None:
+                            _restore_inputs(variant, snap)
+                        fuzz_ok, fuzz_msg = _verify(
+                            fuzz_result, fuzz_expected, variant,
+                            atol=rt["atol"], rtol=rt["rtol"])
+                        if fuzz_ok:
+                            fuzz_pass += 1
+                        else:
+                            fuzz_fail += 1
+                            _log(f"  FUZZ FAIL {label}: {fuzz_msg}", _RED)
+                    except Exception as e:
+                        fuzz_fail += 1
+                        _log(f"  FUZZ ERROR {label}: {e}", _RED)
+                total = fuzz_pass + fuzz_fail
+                style = _GREEN if fuzz_fail == 0 else _RED
+                _log(f"Fuzz: {fuzz_pass}/{total} passed ({fuzz_seeds} seeds)",
+                     style + _BOLD)
+
         if rt["bench"] and ok:
             if suite is not None:
                 _bench_suite(rt, run_fn, suite, l2_kw,

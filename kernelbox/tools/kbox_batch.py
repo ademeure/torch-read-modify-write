@@ -105,6 +105,9 @@ def _run_registry(args):
     copy_ops = [n for n in all_ops if COPY_BODY in OPS[n]['kernel']]
 
     # Build test configs per op
+    use_fuzz = args.fuzz > 0
+    if use_fuzz:
+        from kernelbox.fuzz import fuzz_inputs
     seeds = list(range(args.seeds))
     extra_sizes = [16, 128, 4096] if args.sizes else []
 
@@ -136,23 +139,43 @@ def _run_registry(args):
             print(f"FAIL {name}: reconfigure: {e}", flush=True)
             continue
 
-        # Test each seed with default dims
-        for seed in seeds:
-            try:
-                d = dict(op['dims'])
-                inputs = op['inputs'](d, seed)
-                expected = op['aten'](inputs)
-                result = reg.dispatch(name, inputs, s, d)
-                v_ok, v_msg = _verify(result, expected, op['atol'])
-                if not v_ok:
+        if use_fuzz:
+            # Universal fuzz: generate inputs from baseline shape, use op['aten'] as reference
+            d = dict(op['dims'])
+            baseline_inputs = op['inputs'](d, 1)
+            ref_fn = op['aten']
+            for label, variant in fuzz_inputs(baseline_inputs, seeds=args.fuzz):
+                try:
+                    expected = ref_fn(variant)
+                    result = reg.dispatch(name, variant, s, d)
+                    v_ok, v_msg = _verify(result, expected, op['atol'])
+                    if not v_ok:
+                        ok = False
+                        fail_msg = f"{label}: {v_msg}"
+                        break
+                    n_tested += 1
+                except Exception as e:
                     ok = False
-                    fail_msg = f"seed={seed}: {v_msg}"
+                    fail_msg = f"{label}: {e}"
                     break
-                n_tested += 1
-            except Exception as e:
-                ok = False
-                fail_msg = f"seed={seed}: {e}"
-                break
+        else:
+            # Legacy: per-op input generators with seed semantics
+            for seed in seeds:
+                try:
+                    d = dict(op['dims'])
+                    inputs = op['inputs'](d, seed)
+                    expected = op['aten'](inputs)
+                    result = reg.dispatch(name, inputs, s, d)
+                    v_ok, v_msg = _verify(result, expected, op['atol'])
+                    if not v_ok:
+                        ok = False
+                        fail_msg = f"seed={seed}: {v_msg}"
+                        break
+                    n_tested += 1
+                except Exception as e:
+                    ok = False
+                    fail_msg = f"seed={seed}: {e}"
+                    break
 
         # Test extra sizes (only seed=1, only for simple 1D/2D ops)
         # Skip ops with custom output specs (pooling, conv, etc) — size changes break them
@@ -226,6 +249,10 @@ def _run_files(args):
     import torch
     from kernelbox.dev import KernelSession
 
+    use_fuzz = args.fuzz > 0
+    if use_fuzz:
+        from kernelbox.fuzz import fuzz_inputs
+
     directory = os.path.abspath(args.directory)
     if not os.path.isdir(directory):
         print(f"Error: '{directory}' is not a directory.", file=sys.stderr)
@@ -294,8 +321,38 @@ def _run_files(args):
                 passed += 1; print(f"PASS {name}", flush=True); continue
 
             ok, msg = _verify(result, exp, state.get("atol", args.atol))
-            if ok:
-                passed += 1; print(f"PASS {name}", flush=True)
+            if not ok:
+                failed += 1; failures.append((name, msg))
+                print(f"FAIL {name}: {msg}", flush=True)
+                continue
+
+            # Auto-fuzz if --fuzz and module has reference()
+            ref_fn = getattr(mod, "reference", None)
+            fuzz_ok = True
+            n_fuzz = 0
+            if use_fuzz and ref_fn and isinstance(state.get("inputs"), (list, tuple)):
+                test_atol = state.get("atol", args.atol)
+                for fuzz_label, variant in fuzz_inputs(state["inputs"], seeds=args.fuzz):
+                    try:
+                        fuzz_exp = ref_fn(variant)
+                        if needs_kernel:
+                            fuzz_result = run_fn(variant, session)
+                        else:
+                            fuzz_result = run_fn(variant)
+                        fuzz_v_ok, fuzz_v_msg = _verify(fuzz_result, fuzz_exp, test_atol)
+                        if not fuzz_v_ok:
+                            fuzz_ok = False
+                            msg = f"fuzz {fuzz_label}: {fuzz_v_msg}"
+                            break
+                        n_fuzz += 1
+                    except Exception as e:
+                        fuzz_ok = False
+                        msg = f"fuzz {fuzz_label}: {e}"
+                        break
+
+            if fuzz_ok:
+                label = f"({n_fuzz+1})" if n_fuzz > 0 else ""
+                passed += 1; print(f"PASS {name} {label}", flush=True)
             else:
                 failed += 1; failures.append((name, msg))
                 print(f"FAIL {name}: {msg}", flush=True)
@@ -342,6 +399,9 @@ examples:
                    help="Seeds per op. seed=0 is special values (NaN/inf/subnormals)")
     p.add_argument("-S", "--sizes", action="store_true",
                    help="Also fuzz tensor sizes (16, 128, 4096)")
+    p.add_argument("--fuzz", type=int, default=0, metavar="N",
+                   help="Auto-fuzz with N mixed seeds + exhaustive specials "
+                        "(registry: uses aten ref; files: requires reference())")
     args = p.parse_args()
 
     if args.registry:

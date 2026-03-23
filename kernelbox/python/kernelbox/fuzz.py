@@ -25,7 +25,8 @@ SPECIAL_VALUES = [
     1e-45, -1e-45,          # subnormals (float32)
     1.18e-38, -1.18e-38,    # near min normal (float32)
     3.4e38, -3.4e38,        # near max (float32)
-    float("nan"), float("inf"), float("-inf"),
+    float("nan"), float("nan") * -1,  # +NaN, -NaN (sign bit differs)
+    float("inf"), float("-inf"),
 ]
 
 SAFE_SPECIAL_VALUES = [v for v in SPECIAL_VALUES

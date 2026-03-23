@@ -562,12 +562,17 @@ _LERP_KERNEL = '''extern "C" __global__ void k(
     const float *a, const float *b, const float *w, float *out, unsigned int n
 ) {
     unsigned int i = blockIdx.x * blockDim.x + threadIdx.x;
-    if (i < n) out[i] = a[i] + w[i] * (b[i] - a[i]);
+    if (i < n) {
+        float ai = a[i], bi = b[i], wi = w[i], d = bi - ai;
+        // Two-formula lerp matching PyTorch: anchors to nearer endpoint
+        // to avoid catastrophic cancellation. Boundary at |w|<0.5 (strict).
+        // Compiles to predicated FMA — no branch in PTX/SASS.
+        out[i] = (fabsf(wi) < 0.5f) ? (ai + wi * d) : (bi - (1.0f - wi) * d);
+    }
 }'''
 _reg("lerp", kernel=_LERP_KERNEL,
      inputs=lambda d, s: [_seeded((d["n"],), s), _seeded((d["n"],), s+100), _seeded_pos((d["n"],), s+200, bias=0)],
-     aten=lambda inp: [torch.ops.aten.lerp.Tensor(*inp)],
-     fuzz_atol=1e30)  # a+w*(b-a) has catastrophic cancellation with extreme a,b
+     aten=lambda inp: [torch.ops.aten.lerp.Tensor(*inp)])
 
 # ─── Embedding ──────────────────────────────────────────────────────────────
 

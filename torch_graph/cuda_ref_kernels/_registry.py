@@ -1373,7 +1373,7 @@ _CUMPROD_KERNEL = '''extern "C" __global__ void k(
 
 _reg("cumprod", kernel=_CUMPROD_KERNEL,
      inputs=lambda d, s: [_seeded_pos((d["d0"], d["d1"]), s, bias=0.5)],
-     dims={"d0": 8, "d1": 16}, dispatch=_red_dispatch, atol=1e-3, fuzz_atol=1e30,  # running product overflow/underflow with extreme values
+     dims={"d0": 8, "d1": 16}, dispatch=_red_dispatch, atol=1e-3, fuzz_atol=1e30,
      aten=lambda inp: [torch.ops.aten.cumprod.default(inp[0], -1).flatten()],
      outputs=lambda d: ["float32;n=%d" % (d["d0"]*d["d1"])],
      grid=lambda d: (d["d0"],), block=(1,))

@@ -4,6 +4,11 @@ Generates variant inputs from baseline shapes: seeded randn with special
 float values (NaN, inf, subnormals, zeros, boundary) injected at random
 positions. Always tests both with and without NaN/inf.
 
+The guarantee region uses cross-product indexing across float inputs so
+that for binary ops, ALL pairs of special values are tested (not just
+the diagonal). For 27 specials and 2 inputs: 729 combinations in the
+first 729 elements.
+
     from kernelbox.fuzz import fuzz_inputs
     for label, variant in fuzz_inputs(baseline_inputs, seeds=10):
         expected = reference(variant)
@@ -31,8 +36,10 @@ def fuzz_inputs(baseline_inputs, seeds=10):
     """Yield (label, variant_inputs) pairs. Total = 2 * seeds.
 
     Each seed yields two variants: full specials (with NaN/inf) and safe
-    (without). Non-float tensors are cloned unchanged. Every special value
-    is guaranteed to appear at least once per float tensor.
+    (without). Non-float tensors are cloned unchanged.
+
+    The guarantee region covers the full cross-product of special values
+    across all float inputs (e.g. 27^2 = 729 positions for binary ops).
     """
     for seed in range(seeds):
         yield _gen(baseline_inputs, seed, SPECIAL_VALUES, "fuzz")
@@ -47,6 +54,7 @@ def _gen(baseline, seed, specials, prefix):
     frac = 0.05 + 0.20 * ((seed * 7 + 3) % 11) / 10
 
     variant = []
+    float_idx = 0
     for t in baseline:
         if not t.is_floating_point():
             variant.append(t.clone())
@@ -54,17 +62,22 @@ def _gen(baseline, seed, specials, prefix):
 
         s = s_all.to(t.dtype)
         flat = torch.randn(t.numel(), dtype=t.dtype, device=t.device, generator=g)
+        n = flat.numel()
 
         # Inject specials at random positions
         mask = torch.rand(flat.shape, device=device, generator=g) < frac
         idx = torch.randint(ns, flat.shape, device=device, generator=g)
         flat[mask] = s[idx[mask]]
 
-        # Guarantee every special appears at least once
-        n = flat.numel()
-        for i in range(min(ns, n)):
-            flat[i] = s[i]
+        # Cross-product guarantee: input j uses stride ns^j, so all
+        # combinations across inputs appear in the first ns^(j+1) positions.
+        # Binary op with 27 specials: 729 positions cover all pairs.
+        stride = ns ** float_idx
+        guarantee_len = min(ns * stride, n)
+        positions = torch.arange(guarantee_len, device=device)
+        flat[:guarantee_len] = s[(positions // stride) % ns]
 
+        float_idx += 1
         variant.append(flat.view(t.shape))
 
     return (f"{prefix}_{seed}", variant)

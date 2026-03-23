@@ -6,8 +6,9 @@ Three modes per seed, yielded in order:
   rand_N  — pure randn, no specials at all
 
 Cross-product guarantee region covers all combinations of special values
-across float inputs (e.g. 30^2=900 for binary ops). Offset by seed so
-different seeds test the cross-product against different random neighbors.
+across float inputs (e.g. 31^2=961 for binary ops). All float inputs
+share the same guarantee region so every pair is tested. Seed rotates
+values so different seeds cover different cross-product slices.
 
     from kernelbox.fuzz import fuzz_inputs
     for label, variant in fuzz_inputs(baseline_inputs, seeds=10):
@@ -37,6 +38,7 @@ _FINITE_SPECIALS = [
 _NAN_BITS = [
     0x7FC00000,  # +qNaN (default, payload=0)
     0xFFC00000,  # -qNaN (sign bit set)
+    0x7FC00001,  # +qNaN payload=1
     0x7FFFFFFF,  # +qNaN all payload bits set
     0x7F800001,  # +sNaN (quiet bit=0, payload=1) — GPU won't trap but bit pattern differs
 ]
@@ -78,6 +80,12 @@ def _gen(baseline, seed, specials_f32, prefix):
     ns = len(specials_f32)
     frac = 0.05 + 0.20 * ((seed * 7 + 3) % 11) / 10
 
+    # Count float inputs to size the cross-product guarantee region.
+    # All float inputs share the same region length so every combination
+    # of specials across inputs is covered.
+    n_float = sum(1 for t in baseline if t.is_floating_point())
+    full_xprod = ns ** n_float  # e.g. 31^2=961 for binary ops
+
     variant = []
     float_idx = 0
     for t in baseline:
@@ -94,12 +102,12 @@ def _gen(baseline, seed, specials_f32, prefix):
         idx = torch.randint(ns, flat.shape, device=device, generator=g)
         flat[mask] = s[idx[mask]]
 
-        # Cross-product guarantee: input j uses stride ns^j, covering all
-        # combinations across inputs. Seed rotates both position (offset)
-        # and values (shift) so different seeds test different cross-product
-        # slices against different random neighborhoods.
+        # Cross-product guarantee: all float inputs use the same region
+        # length (ns^n_float). Input j uses stride ns^j within that region.
+        # Seed rotates values so different seeds cover different slices
+        # (critical when full_xprod > n and one seed can't cover all).
+        guarantee_len = min(full_xprod, n)
         stride = ns ** float_idx
-        guarantee_len = min(ns * stride, n)
         offset = (seed * guarantee_len) % n if guarantee_len < n else 0
         positions = torch.arange(guarantee_len, device=device)
         values = s[((positions // stride) + seed) % ns]

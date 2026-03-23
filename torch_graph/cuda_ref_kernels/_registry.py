@@ -1363,12 +1363,41 @@ _reg("argmin", kernel=_ARGMAX_KERNEL.replace("> best", "< best"),
 _CUMPROD_KERNEL = '''extern "C" __global__ void k(
     const float *input, float *output, unsigned int rows, unsigned int cols
 ) {
+    // Sklansky inclusive prefix scan matching PyTorch (ScanUtils.cuh).
+    // Each thread loads 2 values, then log2(2*blockDim.x) Sklansky steps.
+    // block_total carries across blocks for cols > 2*blockDim.x.
     unsigned int row = blockIdx.x;
     if (row >= rows) return;
     const float *ri = input + row * cols;
     float *ro = output + row * cols;
-    float acc = 1.0f;
-    for (unsigned int j = 0; j < cols; j++) { acc *= ri[j]; ro[j] = acc; }
+    __shared__ float buf[1024];
+    unsigned int nt = blockDim.x;  // num_threads_x
+    float block_total = 1.0f;
+    for (unsigned int block_col = 0; block_col < cols; block_col += 2 * nt) {
+        unsigned int col1 = block_col + threadIdx.x;
+        unsigned int col2 = block_col + nt + threadIdx.x;
+        buf[threadIdx.x] = (col1 < cols) ? ri[col1] : 1.0f;
+        buf[nt + threadIdx.x] = (col2 < cols) ? ri[col2] : 1.0f;
+        if (threadIdx.x == 0) buf[0] = buf[0] * block_total;
+        __syncthreads();
+        // Sklansky parallel prefix scan
+        for (unsigned int m = 0; (1u << m) < 2 * nt; m++) {
+            unsigned int s = 1u << m;
+            unsigned int a = ((threadIdx.x >> m) << (m + 1)) | s;
+            unsigned int ti = a + (threadIdx.x % s);
+            unsigned int si = a - 1;
+            if (ti < 2 * nt) {
+                float prev = buf[si];
+                __syncthreads();
+                buf[ti] = prev * buf[ti];
+            }
+            __syncthreads();
+        }
+        if (col1 < cols) ro[col1] = buf[threadIdx.x];
+        if (col2 < cols) ro[col2] = buf[nt + threadIdx.x];
+        block_total = buf[2 * nt - 1];
+        __syncthreads();
+    }
 }'''
 
 _reg("cumprod", kernel=_CUMPROD_KERNEL,
@@ -1376,7 +1405,7 @@ _reg("cumprod", kernel=_CUMPROD_KERNEL,
      dims={"d0": 8, "d1": 16}, dispatch=_red_dispatch, atol=1e-3, fuzz_atol=1e30,
      aten=lambda inp: [torch.ops.aten.cumprod.default(inp[0], -1).flatten()],
      outputs=lambda d: ["float32;n=%d" % (d["d0"]*d["d1"])],
-     grid=lambda d: (d["d0"],), block=(1,))
+     grid=lambda d: (d["d0"],), block=(8,))
 
 # Any reduction
 _ANY_KERNEL = '''extern "C" __global__ void k(

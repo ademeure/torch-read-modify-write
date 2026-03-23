@@ -709,9 +709,9 @@ _ADDMM_KERNEL = '''extern "C" __global__ void k(
     unsigned int row = blockIdx.y * blockDim.y + threadIdx.y;
     unsigned int col = blockIdx.x * blockDim.x + threadIdx.x;
     if (row < M && col < N) {
-        double sum = (double)bias[col];
+        float sum = bias[col];
         for (unsigned int k = 0; k < K; k++)
-            sum += (double)A[row * K + k] * (double)B[k * N + col];
+            sum += A[row * K + k] * B[k * N + col];
         C[row * N + col] = (float)sum;
     }
 }'''
@@ -753,9 +753,9 @@ _MV_KERNEL = '''extern "C" __global__ void k(
 ) {
     unsigned int row = blockIdx.x * blockDim.x + threadIdx.x;
     if (row < M) {
-        double sum = 0.0;
-        for (unsigned int k = 0; k < K; k++) sum += (double)A[row*K + k] * (double)x[k];
-        y[row] = (float)sum;
+        float sum = 0.0f;
+        for (unsigned int k = 0; k < K; k++) sum += A[row*K + k] * x[k];
+        y[row] = sum;
     }
 }'''
 
@@ -890,8 +890,8 @@ _CUMSUM_KERNEL = '''extern "C" __global__ void k(
     if (row >= rows) return;
     const float *ri = input + row * cols;
     float *ro = output + row * cols;
-    double acc = 0.0;
-    for (unsigned int j = 0; j < cols; j++) { acc += ri[j]; ro[j] = (float)acc; }
+    float acc = 0.0f;
+    for (unsigned int j = 0; j < cols; j++) { acc += ri[j]; ro[j] = acc; }
 }'''
 
 _reg("cumsum", kernel=_CUMSUM_KERNEL, inputs=_2d, dims={"d0": 8, "d1": 64},
@@ -944,17 +944,17 @@ _CONV2D_KERNEL = '''extern "C" __global__ void k(
     unsigned int ow = idx % outW, oh = (idx / outW) % outH;
     unsigned int oc = (idx / (outW * outH)) % C_out;
     unsigned int n = idx / (outW * outH * C_out);
-    double sum = (double)bias[oc];
+    float sum = bias[oc];
     for (unsigned int ic = 0; ic < C_in; ic++)
         for (unsigned int kh = 0; kh < kH; kh++)
             for (unsigned int kw = 0; kw < kW; kw++) {
                 int ih = (int)(oh * strideH + kh) - (int)padH;
                 int iw = (int)(ow * strideW + kw) - (int)padW;
                 if (ih >= 0 && ih < (int)H && iw >= 0 && iw < (int)W)
-                    sum += (double)input[n*C_in*H*W + ic*H*W + ih*W + iw]
-                         * (double)weight[oc*C_in*kH*kW + ic*kH*kW + kh*kW + kw];
+                    sum += input[n*C_in*H*W + ic*H*W + ih*W + iw]
+                         * weight[oc*C_in*kH*kW + ic*kH*kW + kh*kW + kw];
             }
-    output[idx] = (float)sum;
+    output[idx] = sum;
 }'''
 
 _reg("convolution", kernel=_CONV2D_KERNEL,
@@ -1371,8 +1371,8 @@ _CUMPROD_KERNEL = '''extern "C" __global__ void k(
     if (row >= rows) return;
     const float *ri = input + row * cols;
     float *ro = output + row * cols;
-    double acc = 1.0;
-    for (unsigned int j = 0; j < cols; j++) { acc *= ri[j]; ro[j] = (float)acc; }
+    float acc = 1.0f;
+    for (unsigned int j = 0; j < cols; j++) { acc *= ri[j]; ro[j] = acc; }
 }'''
 
 _reg("cumprod", kernel=_CUMPROD_KERNEL,
@@ -1407,13 +1407,15 @@ _TOPK_KERNEL = '''extern "C" __global__ void k(
     if (row >= rows) return;
     const float *ri = input + row * cols;
     float *rv = values + row * topk;
+    unsigned int used[64];  // track by index, not value (NaN == NaN is false)
     for (unsigned int i = 0; i < topk; i++) {
         float best = -1e38f; unsigned int best_j = 0;
         for (unsigned int j = 0; j < cols; j++) {
             float v = ri[j]; int already = 0;
-            for (unsigned int p = 0; p < i; p++) if (rv[p] == v) { already = 1; break; }
+            for (unsigned int p = 0; p < i; p++) if (used[p] == j) { already = 1; break; }
             if (!already && (v > best || (v != v && best == best))) { best = v; best_j = j; }
         }
+        used[i] = best_j;
         rv[i] = best;
     }
 }'''
@@ -1544,9 +1546,9 @@ _LINEAR_KERNEL = '''extern "C" __global__ void k(
     unsigned int row = blockIdx.y * blockDim.y + threadIdx.y;
     unsigned int col = blockIdx.x * blockDim.x + threadIdx.x;
     if (row < M && col < N) {
-        double sum = (double)bias[col];
-        for (unsigned int k = 0; k < K; k++) sum += (double)x[row*K+k] * (double)w[col*K+k];
-        out[row*N+col] = (float)sum;
+        float sum = bias[col];
+        for (unsigned int k = 0; k < K; k++) sum += x[row*K+k] * w[col*K+k];
+        out[row*N+col] = sum;
     }
 }'''
 
@@ -1726,9 +1728,9 @@ _NLL_KERNEL = '''extern "C" __global__ void k(
     unsigned int N, unsigned int C
 ) {
     if (threadIdx.x != 0 || blockIdx.x != 0) return;
-    double sum = 0.0;
+    float sum = 0.0f;
     for (unsigned int i = 0; i < N; i++) sum -= log_probs[i * C + target[i]];
-    output[0] = (float)(sum / (double)N);
+    output[0] = sum / (float)N;
 }'''
 
 _reg("nll_loss_forward", kernel=_NLL_KERNEL,
@@ -1795,10 +1797,10 @@ _ADAPTIVE_AVG_POOL2D_KERNEL = '''extern "C" __global__ void k(
     unsigned int n = idx / (outW * outH * C);
     unsigned int h0 = oh*H/outH, h1 = (oh+1)*H/outH;
     unsigned int w0 = ow*W/outW, w1 = (ow+1)*W/outW;
-    double sum = 0.0; int count = 0;
+    float sum = 0.0f; int count = 0;
     for (unsigned int h = h0; h < h1; h++)
-        for (unsigned int w = w0; w < w1; w++) { sum += (double)input[n*C*H*W+c*H*W+h*W+w]; count++; }
-    output[idx] = (float)(sum / (double)count);
+        for (unsigned int w = w0; w < w1; w++) { sum += input[n*C*H*W+c*H*W+h*W+w]; count++; }
+    output[idx] = sum / (float)count;
 }'''
 
 _reg("adaptive_avg_pool2d", kernel=_ADAPTIVE_AVG_POOL2D_KERNEL,

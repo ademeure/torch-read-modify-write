@@ -23,8 +23,11 @@ import torch
 _FINITE_SPECIALS = [
     0.0, -0.0, 1.0, -1.0, 0.5, -0.5, 2.0, -2.0, 4.0, -4.0,
     100.0, -100.0, 1e-7, -1e-7, 1e7, -1e7,
-    1e-45, -1e-45,          # subnormals (float32)
-    1.18e-38, -1.18e-38,    # near min normal (float32)
+    1e-45, -1e-45,                      # smallest subnormal (0x00000001)
+    1.1754942106924411e-38,              # largest subnormal (0x007FFFFF)
+    -1.1754942106924411e-38,
+    1.1754943508222875e-38,              # smallest normal (0x00800000)
+    -1.1754943508222875e-38,
     3.4e38, -3.4e38,        # near max (float32)
     float("inf"), float("-inf"),
 ]
@@ -34,8 +37,9 @@ _FINITE_SPECIALS = [
 _NAN_BITS = [
     0x7FC00000,  # +qNaN (default, payload=0)
     0xFFC00000,  # -qNaN (sign bit set)
-    0x7F800001,  # +sNaN payload=1 (quiet bit=0, won't trap on GPU but bit pattern differs)
+    0x7FC00001,  # +qNaN payload=1
     0x7FFFFFFF,  # +qNaN all payload bits set
+    0x7F800001,  # +sNaN (quiet bit=0, payload=1) — GPU won't trap but bit pattern differs
 ]
 
 SAFE_SPECIAL_VALUES = [v for v in _FINITE_SPECIALS

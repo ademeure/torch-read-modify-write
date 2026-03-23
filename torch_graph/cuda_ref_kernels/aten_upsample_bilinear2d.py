@@ -20,6 +20,9 @@ extern "C" __global__ void aten_upsample_bilinear2d(
     float w_scale = (float)iW / (float)oW;
     float h = ((float)oh + 0.5f) * h_scale - 0.5f;
     float w = ((float)ow + 0.5f) * w_scale - 0.5f;
+    // PyTorch clamps negative source coords to 0 before floor (UpSample.cuh)
+    if (h < 0.0f) h = 0.0f;
+    if (w < 0.0f) w = 0.0f;
     int h0 = (int)floorf(h), w0 = (int)floorf(w);
     float hf = h - h0, wf = w - w0;
     int h1 = h0 + 1, w1 = w0 + 1;

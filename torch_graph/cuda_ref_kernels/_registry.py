@@ -1245,7 +1245,6 @@ _SDPA_KERNEL = '''extern "C" __global__ void k(
         for (unsigned int kk = 0; kk < D; kk++)
             qk += Q[b*H*S*D + h*S*D + s*D + kk] * K[b*H*S*D + h*S*D + j*D + kk];
         qk *= scale;
-        qk *= scale;
         if (qk > max_qk) max_qk = qk;
     }
     float sum_exp = 0.0f, weighted_v = 0.0f;

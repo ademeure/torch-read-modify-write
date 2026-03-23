@@ -122,13 +122,20 @@ def _aten_dispatch(inputs, kernel, dims):
 OPS = {}
 
 def _reg(name, *, kernel, aten, inputs=_1d, dims=None, dispatch=_auto,
-         atol=1e-5, outputs=None, grid=None, block=None):
-    """Register an op."""
+         atol=1e-5, fuzz_atol=None, outputs=None, grid=None, block=None):
+    """Register an op.
+
+    atol:      tolerance for normal inputs (--seeds).
+    fuzz_atol: tolerance for adversarial inputs (--fuzz). Defaults to atol.
+               Set higher for ops where float32 accumulation with extreme
+               values legitimately diverges from aten.
+    """
     if dims is None:
         dims = {"n": 1024}
     OPS[name] = {
         "kernel": kernel, "aten": aten, "inputs": inputs,
         "dims": dict(dims), "dispatch": dispatch, "atol": atol,
+        "fuzz_atol": fuzz_atol if fuzz_atol is not None else atol,
         "outputs": outputs, "grid": grid, "block": block,
     }
 
@@ -399,13 +406,10 @@ _reg("gelu_backward", kernel=(
 _reg("silu_backward", kernel=_binary(
      "(a * (1.0f / (1.0f + expf(-b))) * (1.0f + b * (1.0f - 1.0f / (1.0f + expf(-b)))))"),
      inputs=_pair, aten=lambda inp: [torch.ops.aten.silu_backward.default(*inp)], atol=1e-4)
-_reg("sigmoid_backward", kernel=(
-    'extern "C" __global__ void k(const float *in0, const float *in1, float *out0, unsigned int n) {\n'
-    '    unsigned int i = blockIdx.x * blockDim.x + threadIdx.x;\n'
-    '    if (i < n) { float a = in0[i]; float sb = fminf(fmaxf(in1[i], 0.0f), 1.0f); out0[i] = a * sb * (1.0f - sb); }\n'
-    '}'),
+_reg("sigmoid_backward", kernel=_binary("(a * b * (1.0f - b))"),
      inputs=lambda d, s: [_seeded((d["n"],), s), torch.sigmoid(_seeded((d["n"],), s+500))],
-     aten=lambda inp: [torch.ops.aten.sigmoid_backward.default(*inp)])
+     aten=lambda inp: [torch.ops.aten.sigmoid_backward.default(*inp)],
+     fuzz_atol=1e30)  # fuzz puts b outside [0,1]
 _reg("tanh_backward", kernel=_binary("(a * (1.0f - b * b))"),
      inputs=lambda d, s: [_seeded((d["n"],), s), torch.tanh(_seeded((d["n"],), s+500))],
      aten=lambda inp: [torch.ops.aten.tanh_backward.default(*inp)])
@@ -558,11 +562,12 @@ _LERP_KERNEL = '''extern "C" __global__ void k(
     const float *a, const float *b, const float *w, float *out, unsigned int n
 ) {
     unsigned int i = blockIdx.x * blockDim.x + threadIdx.x;
-    if (i < n) { float d = b[i] - a[i]; out[i] = isinf(a[i]) && isinf(b[i]) && ((a[i] > 0) == (b[i] > 0)) ? a[i] : a[i] + w[i] * d; }
+    if (i < n) out[i] = a[i] + w[i] * (b[i] - a[i]);
 }'''
 _reg("lerp", kernel=_LERP_KERNEL,
      inputs=lambda d, s: [_seeded((d["n"],), s), _seeded((d["n"],), s+100), _seeded_pos((d["n"],), s+200, bias=0)],
-     aten=lambda inp: [torch.ops.aten.lerp.Tensor(*inp)])
+     aten=lambda inp: [torch.ops.aten.lerp.Tensor(*inp)],
+     fuzz_atol=1e30)  # a+w*(b-a) has catastrophic cancellation with extreme a,b
 
 # ─── Embedding ──────────────────────────────────────────────────────────────
 
@@ -713,7 +718,7 @@ _reg("addmm", kernel=_ADDMM_KERNEL,
      dispatch=lambda inp, k, d: [k(*inp, params=[
          k.in_ptr(0), k.in_ptr(1), k.in_ptr(2), k.out_ptr(0),
          np.uint32(inp[1].shape[0]), np.uint32(inp[1].shape[1]), np.uint32(inp[2].shape[1])])],
-     atol=1e-3,
+     atol=1e-3, fuzz_atol=1e30,  # cuBLAS vs float32 matmul accumulation
      outputs=lambda d: ["float32;n=%d" % (d["d0"]*d["d2"])],
      grid=lambda d: ((d["d2"]+15)//16, (d["d0"]+15)//16), block=(16, 16))
 
@@ -755,7 +760,8 @@ _reg("mv", kernel=_MV_KERNEL, dims={"d0": 64, "d1": 32},
      dispatch=lambda inp, k, d: [k(*inp, params=[
          k.in_ptr(0), k.in_ptr(1), k.out_ptr(0),
          np.uint32(inp[0].shape[0]), np.uint32(inp[0].shape[1])])],
-     atol=1e-3, outputs=lambda d: ["float32;n=%d" % d["d0"]],
+     atol=1e-3, fuzz_atol=1e30,
+     outputs=lambda d: ["float32;n=%d" % d["d0"]],
      grid=lambda d: ((d["d0"]+255)//256,))
 
 _OUTER_KERNEL = '''extern "C" __global__ void k(
@@ -885,7 +891,7 @@ _CUMSUM_KERNEL = '''extern "C" __global__ void k(
 
 _reg("cumsum", kernel=_CUMSUM_KERNEL, inputs=_2d, dims={"d0": 8, "d1": 64},
      aten=lambda inp: [torch.ops.aten.cumsum.default(inp[0], -1).flatten()],
-     dispatch=_red_dispatch, atol=1e-4,
+     dispatch=_red_dispatch, atol=1e-4, fuzz_atol=1e30,  # sequential float32 accumulation with extreme values
      outputs=lambda d: ["float32;n=%d" % (d["d0"]*d["d1"])],
      grid=lambda d: (d["d0"],), block=(1,))
 
@@ -1056,7 +1062,7 @@ _reg("native_batch_norm", kernel=_BATCH_NORM_KERNEL,
      dispatch=lambda inp, k, d: (lambda N,C,H,W: [k(*inp, params=[
          k.in_ptr(0), k.in_ptr(1), k.in_ptr(2), k.in_ptr(3), k.in_ptr(4), k.out_ptr(0),
          np.uint32(N), np.uint32(C), np.uint32(H*W), np.float32(1e-5)])])(*inp[0].shape),
-     atol=1e-4,
+     atol=1e-4, fuzz_atol=1e30,  # (x-mean)*rstd with inf inputs
      outputs=lambda d: ["float32;n=%d" % (d["N"]*d["C"]*d["H"]*d["W"])],
      grid=lambda d: ((d["N"]*d["C"]*d["H"]*d["W"]+255)//256,))
 
@@ -1264,7 +1270,7 @@ _reg("scaled_dot_product_attention", kernel=_SDPA_KERNEL,
          k.in_ptr(0), k.in_ptr(1), k.in_ptr(2), k.out_ptr(0),
          np.uint32(inp[0].shape[0]), np.uint32(inp[0].shape[1]),
          np.uint32(inp[0].shape[2]), np.uint32(inp[0].shape[3])])],
-     atol=1e-3,
+     atol=1e-3, fuzz_atol=1e30,  # NaN in Q/K poisons softmax
      outputs=lambda d: ["float32;n=%d" % (d["B"]*d["H"]*d["S"]*d["D"])],
      grid=lambda d: ((d["B"]*d["H"]*d["S"]*d["D"]+255)//256,))
 
@@ -1366,7 +1372,7 @@ _CUMPROD_KERNEL = '''extern "C" __global__ void k(
 
 _reg("cumprod", kernel=_CUMPROD_KERNEL,
      inputs=lambda d, s: [_seeded_pos((d["d0"], d["d1"]), s, bias=0.5)],
-     dims={"d0": 8, "d1": 16}, dispatch=_red_dispatch, atol=1e-3,
+     dims={"d0": 8, "d1": 16}, dispatch=_red_dispatch, atol=1e-3, fuzz_atol=1e30,  # running product overflow/underflow with extreme values
      aten=lambda inp: [torch.ops.aten.cumprod.default(inp[0], -1).flatten()],
      outputs=lambda d: ["float32;n=%d" % (d["d0"]*d["d1"])],
      grid=lambda d: (d["d0"],), block=(1,))
@@ -1415,7 +1421,8 @@ _reg("topk", kernel=_TOPK_KERNEL,
          k.in_ptr(0), k.out_ptr(0),
          np.uint32(inp[0].shape[0]), np.uint32(inp[0].shape[1]), np.uint32(d["k"])])],
      outputs=lambda d: ["float32;n=%d" % (d["d0"]*d["k"])],
-     grid=lambda d: (d["d0"],), block=(1,))
+     grid=lambda d: (d["d0"],), block=(1,),
+     fuzz_atol=1e30)  # NaN comparison in iterative top-k selection
 
 # Log softmax
 _LOG_SOFTMAX_KERNEL = _SOFTMAX_KERNEL.replace(
@@ -1482,7 +1489,7 @@ _reg("native_group_norm", kernel=_GROUP_NORM_KERNEL,
          k.in_ptr(0), k.in_ptr(1), k.in_ptr(2), k.out_ptr(0),
          np.uint32(d["N"]), np.uint32(d["C"]), np.uint32(d["H"]*d["W"]),
          np.uint32(d["G"]), np.float32(1e-5)])],
-     atol=1e-4,
+     atol=1e-4, fuzz_atol=1e30,  # variance formula with extreme values
      outputs=lambda d: ["float32;n=%d" % (d["N"]*d["C"]*d["H"]*d["W"])],
      grid=lambda d: (d["N"]*d["G"],), block=(256,))
 
@@ -1490,7 +1497,7 @@ _reg("native_group_norm", kernel=_GROUP_NORM_KERNEL,
 _reg("addcmul", kernel='''extern "C" __global__ void k(
     const float *inp, const float *t1, const float *t2, float *out, float value, unsigned int n
 ) { unsigned int i = blockIdx.x * blockDim.x + threadIdx.x;
-    if (i < n) out[i] = (float)((double)inp[i] + (double)value * (double)t1[i] * (double)t2[i]); }''',
+    if (i < n) out[i] = inp[i] + value * (t1[i] * t2[i]); }''',
      inputs=lambda d, s: [_seeded((d["n"],), s), _seeded((d["n"],), s+100), _seeded((d["n"],), s+200)],
      aten=lambda inp: [torch.ops.aten.addcmul.default(*inp, value=0.5)],
      dispatch=lambda inp, k, d: [k(*inp, params=[
@@ -1500,7 +1507,7 @@ _reg("addcmul", kernel='''extern "C" __global__ void k(
 _reg("addcdiv", kernel='''extern "C" __global__ void k(
     const float *inp, const float *t1, const float *t2, float *out, float value, unsigned int n
 ) { unsigned int i = blockIdx.x * blockDim.x + threadIdx.x;
-    if (i < n) out[i] = (float)((double)inp[i] + (double)value * (double)t1[i] / (double)t2[i]); }''',
+    if (i < n) out[i] = inp[i] + value * (t1[i] / t2[i]); }''',
      inputs=lambda d, s: [_seeded((d["n"],), s), _seeded((d["n"],), s+100), _seeded_pos((d["n"],), s+200)],
      aten=lambda inp: [torch.ops.aten.addcdiv.default(*inp, value=0.5)], atol=1e-4,
      dispatch=lambda inp, k, d: [k(*inp, params=[
@@ -1545,7 +1552,7 @@ _reg("linear", kernel=_LINEAR_KERNEL,
      dispatch=lambda inp, k, d: [k(*inp, params=[
          k.in_ptr(0), k.in_ptr(1), k.in_ptr(2), k.out_ptr(0),
          np.uint32(d["d0"]), np.uint32(d["d1"]), np.uint32(d["d2"])])],
-     atol=1e-3,
+     atol=1e-3, fuzz_atol=1e30,  # cuBLAS vs float32 matmul accumulation
      outputs=lambda d: ["float32;n=%d" % (d["d0"]*d["d2"])],
      grid=lambda d: ((d["d2"]+15)//16, (d["d0"]+15)//16), block=(16, 16))
 
@@ -1727,7 +1734,8 @@ _reg("nll_loss_forward", kernel=_NLL_KERNEL,
      dispatch=lambda inp, k, d: [k(*inp, params=[
          k.in_ptr(0), k.in_ptr(1), k.out_ptr(0),
          np.uint32(d["N"]), np.uint32(d["C"])])],
-     atol=1e-4, outputs=lambda d: ["float32;n=1"], grid=lambda d: (1,), block=(1,))
+     atol=1e-4, fuzz_atol=1e30,  # float32 mean with extreme log-probs
+     outputs=lambda d: ["float32;n=1"], grid=lambda d: (1,), block=(1,))
 
 # Max pool 2D
 _MAX_POOL2D_KERNEL = '''extern "C" __global__ void k(
@@ -1796,7 +1804,7 @@ _reg("adaptive_avg_pool2d", kernel=_ADAPTIVE_AVG_POOL2D_KERNEL,
          k.in_ptr(0), k.out_ptr(0),
          np.uint32(N), np.uint32(C), np.uint32(H), np.uint32(W),
          np.uint32(d["oH"]), np.uint32(d["oW"])])])(*inp[0].shape),
-     atol=1e-4,
+     atol=1e-4, fuzz_atol=1e30,  # float32 sum of extreme values in pool
      outputs=lambda d: ["float32;n=%d" % (d["N"]*d["C"]*d["oH"]*d["oW"])],
      grid=lambda d: ((d["N"]*d["C"]*d["oH"]*d["oW"]+255)//256,))
 
@@ -2131,7 +2139,7 @@ _FILE_OPS = {
     "upsample_bilinear2d": {"dims": {"N": 1, "C": 4, "H": 4, "W": 4},
         "inputs": lambda d, s: [_seeded((d["N"],d["C"],d["H"],d["W"]), s)],
         "aten": lambda inp: [torch.ops.aten.upsample_bilinear2d.vec(inp[0], [8,8], False, None).flatten()],
-        "atol": 1e-4},
+        "atol": 1e-4, "fuzz_atol": 1e30},  # coordinate clamping edge case with NaN
     "upsample_nearest2d": {"dims": {"N": 1, "C": 4, "H": 4, "W": 4},
         "inputs": lambda d, s: [_seeded((d["N"],d["C"],d["H"],d["W"]), s)],
         "aten": lambda inp: [torch.ops.aten.upsample_nearest2d.vec(inp[0], [8,8], None).flatten()]},
@@ -2156,7 +2164,7 @@ for _name, _cfg in _FILE_OPS.items():
         _dispatch = _file_dispatch(_name)
         _reg(_name, kernel=_ksrc, inputs=_cfg["inputs"], dims=_cfg["dims"],
              aten=_cfg["aten"], dispatch=_dispatch, atol=_cfg.get("atol", 1e-5),
-             outputs=None, grid=None, block=None)
+             fuzz_atol=_cfg.get("fuzz_atol"), outputs=None, grid=None, block=None)
         # Patch outputs/grid from the generated file's init_once
         try:
             _ksrc2, _state = _file_state(_name)

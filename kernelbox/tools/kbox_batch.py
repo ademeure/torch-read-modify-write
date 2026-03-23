@@ -36,8 +36,12 @@ def _ensure_kernelbox_importable():
 _ensure_kernelbox_importable()
 
 
-def _verify(result, expected, atol, rtol=1e-5):
-    """NaN-aware comparison. Returns (ok, message)."""
+def _verify(result, expected, atol, rtol=1e-5, inputs=None):
+    """NaN-aware comparison. Returns (ok, message).
+
+    When inputs is provided, failure messages include the input values
+    at the failing position for easy debugging.
+    """
     import torch
     if not isinstance(result, (list, tuple)):
         result = [result]
@@ -51,14 +55,30 @@ def _verify(result, expected, atol, rtol=1e-5):
             return False, f"[{i}] shape {tuple(rf.shape)}!={tuple(ef.shape)}"
         both_nan = torch.isnan(rf) & torch.isnan(ef)
         nan_mm = torch.isnan(rf) != torch.isnan(ef)
+
+        fail_idx = None
         if nan_mm.any():
-            idx = nan_mm.nonzero(as_tuple=True)[0][0].item()
-            return False, f"[{i}] NaN@{idx} got={rf[idx]:.2e} exp={ef[idx]:.2e}"
-        mask = ~both_nan
-        if mask.any():
-            diff = (rf[mask] - ef[mask]).abs().max().item()
-            if diff > atol:
-                return False, f"[{i}] err={diff:.2e} (atol={atol})"
+            fail_idx = nan_mm.nonzero(as_tuple=True)[0][0].item()
+            msg = f"[{i}] NaN@{fail_idx} got={rf[fail_idx]:.6e} exp={ef[fail_idx]:.6e}"
+        else:
+            mask = ~both_nan
+            if mask.any():
+                diff = (rf[mask] - ef[mask]).abs()
+                if diff.max().item() > atol:
+                    # Map back to original index
+                    rel_idx = diff.argmax().item()
+                    fail_idx = mask.nonzero(as_tuple=True)[0][rel_idx].item()
+                    msg = f"[{i}] err={diff.max().item():.6e} @{fail_idx} got={rf[fail_idx]:.6e} exp={ef[fail_idx]:.6e} (atol={atol})"
+
+        if fail_idx is not None:
+            if inputs:
+                inp_vals = []
+                for j, inp in enumerate(inputs):
+                    if isinstance(inp, torch.Tensor) and inp.numel() > fail_idx:
+                        inp_vals.append(f"in{j}={inp.flatten()[fail_idx].item():.6e}")
+                if inp_vals:
+                    msg += f" inputs=[{', '.join(inp_vals)}]"
+            return False, msg
     return True, "ok"
 
 
@@ -148,7 +168,9 @@ def _run_registry(args):
                 try:
                     expected = ref_fn(variant)
                     result = reg.dispatch(name, variant, s, d)
-                    v_ok, v_msg = _verify(result, expected, op['atol'])
+                    v_ok, v_msg = _verify(result, expected,
+                                          op.get('fuzz_atol', op['atol']),
+                                          inputs=variant)
                     if not v_ok:
                         ok = False
                         fail_msg = f"{label}: {v_msg}"

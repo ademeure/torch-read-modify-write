@@ -1261,7 +1261,7 @@ def watch_file(test_path, atol=1e-5, rtol=1e-5, interval=0.3, dump=None,
                         _log(f"  FUZZ ERROR {label}: {e}", _RED)
                 total = fuzz_pass + fuzz_fail
                 style = _GREEN if fuzz_fail == 0 else _RED
-                _log(f"Fuzz: {fuzz_pass}/{total} passed ({fuzz_seeds} seeds)",
+                _log(f"Fuzz: {fuzz_pass}/{total} passed",
                      style + _BOLD)
 
         if rt["bench"] and ok:

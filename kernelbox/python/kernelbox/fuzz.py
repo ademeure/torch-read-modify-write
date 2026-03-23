@@ -6,7 +6,7 @@ Three modes per seed, yielded in order:
   rand_N  — pure randn, no specials at all
 
 Cross-product guarantee region covers all combinations of special values
-across float inputs (e.g. 30^2=900 for binary ops). Offset by seed so
+across float inputs (e.g. 31^2=961 for binary ops). Offset by seed so
 different seeds test the cross-product against different random neighbors.
 
     from kernelbox.fuzz import fuzz_inputs
@@ -48,8 +48,11 @@ SAFE_SPECIAL_VALUES = [v for v in _FINITE_SPECIALS
 
 def _build_specials(device):
     """Build full specials tensor with exact NaN bit patterns."""
+    import numpy as np
     finite = torch.tensor(_FINITE_SPECIALS, dtype=torch.float32, device=device)
-    nan_bits = torch.tensor(_NAN_BITS, dtype=torch.int32, device=device)
+    # Use numpy uint32 → torch int32 view to avoid Python int overflow
+    nan_np = np.array(_NAN_BITS, dtype=np.uint32).view(np.int32)
+    nan_bits = torch.from_numpy(nan_np).to(device)
     nans = nan_bits.view(torch.float32)
     return torch.cat([finite, nans])
 

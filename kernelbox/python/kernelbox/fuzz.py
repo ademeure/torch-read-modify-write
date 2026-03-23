@@ -6,7 +6,7 @@ Three modes per seed, yielded in order:
   rand_N  — pure randn, no specials at all
 
 Cross-product guarantee region covers all combinations of special values
-across float inputs (e.g. 27^2=729 for binary ops). Offset by seed so
+across float inputs (e.g. 30^2=900 for binary ops). Offset by seed so
 different seeds test the cross-product against different random neighbors.
 
     from kernelbox.fuzz import fuzz_inputs
@@ -19,18 +19,35 @@ from __future__ import annotations
 import math
 import torch
 
-SPECIAL_VALUES = [
+# Non-NaN special float values.
+_FINITE_SPECIALS = [
     0.0, -0.0, 1.0, -1.0, 0.5, -0.5, 2.0, -2.0, 4.0, -4.0,
     100.0, -100.0, 1e-7, -1e-7, 1e7, -1e7,
     1e-45, -1e-45,          # subnormals (float32)
     1.18e-38, -1.18e-38,    # near min normal (float32)
     3.4e38, -3.4e38,        # near max (float32)
-    float("nan"), float("nan") * -1,  # +NaN, -NaN (sign bit differs)
     float("inf"), float("-inf"),
 ]
 
-SAFE_SPECIAL_VALUES = [v for v in SPECIAL_VALUES
-                       if not (math.isnan(v) or math.isinf(v))]
+# NaN variants with different bit patterns (payload, sign).
+# Built via int32→float32 view to preserve exact bits.
+_NAN_BITS = [
+    0x7FC00000,  # +qNaN (default, payload=0)
+    0xFFC00000,  # -qNaN (sign bit set)
+    0x7FC00001,  # +qNaN payload=1
+    0x7FFFFFFF,  # +qNaN all payload bits set
+]
+
+SAFE_SPECIAL_VALUES = [v for v in _FINITE_SPECIALS
+                       if not math.isinf(v)]
+
+
+def _build_specials(device):
+    """Build full specials tensor with exact NaN bit patterns."""
+    finite = torch.tensor(_FINITE_SPECIALS, dtype=torch.float32, device=device)
+    nan_bits = torch.tensor(_NAN_BITS, dtype=torch.int32, device=device)
+    nans = nan_bits.view(torch.float32)
+    return torch.cat([finite, nans])
 
 
 def fuzz_inputs(baseline_inputs, seeds=10):
@@ -39,17 +56,20 @@ def fuzz_inputs(baseline_inputs, seeds=10):
     Each seed yields three variants: full specials, safe specials, pure
     random. Non-float tensors are cloned unchanged.
     """
+    device = baseline_inputs[0].device if baseline_inputs else "cuda"
+    all_specials = _build_specials(device)
+    safe_specials = torch.tensor(SAFE_SPECIAL_VALUES, dtype=torch.float32,
+                                 device=device)
     for seed in range(seeds):
-        yield _gen(baseline_inputs, seed, SPECIAL_VALUES, "fuzz")
-        yield _gen(baseline_inputs, seed, SAFE_SPECIAL_VALUES, "safe")
+        yield _gen(baseline_inputs, seed, all_specials, "fuzz")
+        yield _gen(baseline_inputs, seed, safe_specials, "safe")
         yield _gen_rand(baseline_inputs, seed)
 
 
-def _gen(baseline, seed, specials, prefix):
+def _gen(baseline, seed, specials_f32, prefix):
     device = baseline[0].device if baseline else "cuda"
     g = torch.Generator(device=device).manual_seed(seed)
-    s_all = torch.tensor(specials, dtype=torch.float32, device=device)
-    ns = len(s_all)
+    ns = len(specials_f32)
     frac = 0.05 + 0.20 * ((seed * 7 + 3) % 11) / 10
 
     variant = []
@@ -59,7 +79,7 @@ def _gen(baseline, seed, specials, prefix):
             variant.append(t.clone())
             continue
 
-        s = s_all.to(t.dtype)
+        s = specials_f32.to(t.dtype)
         flat = torch.randn(t.numel(), dtype=t.dtype, device=t.device, generator=g)
         n = flat.numel()
 
@@ -94,7 +114,6 @@ def _gen(baseline, seed, specials, prefix):
 def _gen_rand(baseline, seed):
     """Pure randn, no specials. Tests normal-range computation."""
     device = baseline[0].device if baseline else "cuda"
-    # Use a distinct seed space so rand variants differ from fuzz/safe
     g = torch.Generator(device=device).manual_seed(seed + 1_000_000)
 
     variant = []

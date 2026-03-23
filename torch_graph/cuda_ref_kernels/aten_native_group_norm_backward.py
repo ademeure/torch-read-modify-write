@@ -8,15 +8,42 @@ extern "C" __global__ void aten_group_norm_bwd(
     const float *weight, float *grad_input,
     unsigned int N, unsigned int C, unsigned int HW, unsigned int G
 ) {
-    unsigned int idx = blockIdx.x * blockDim.x + threadIdx.x;
-    unsigned int total = N * C * HW;
-    if (idx >= total) return;
-    unsigned int hw = idx % HW;
-    unsigned int c = (idx / HW) % C;
-    unsigned int n = idx / (C * HW);
-    unsigned int g = c / (C / G);
-    unsigned int ng = n * G + g;
-    grad_input[idx] = grad_out[idx] * weight[c] * rstd[ng];
+    // Full 3-term backward per group:
+    // dx = (rstd/M) * (M*dy*w - sum_group(dy*w) - x_hat*sum_group(dy*w*x_hat))
+    // M = cpg * HW (elements per group)
+    unsigned int ng = blockIdx.x;  // one block per (n, g) pair
+    if (ng >= N * G) return;
+    unsigned int n = ng / G, g = ng % G;
+    unsigned int cpg = C / G;
+    unsigned int M = cpg * HW;
+    float m = mean[ng];
+    float rs = rstd[ng];
+    float inv_M = 1.0f / (float)M;
+    unsigned int base = n * C * HW + g * cpg * HW;
+    // Pass 1: sum(dy*w) and sum(dy*w*x_hat) over all elements in this group
+    float sum_dxhat = 0.0f, sum_dxhat_xhat = 0.0f;
+    for (unsigned int ci = 0; ci < cpg; ci++) {
+        unsigned int c = g * cpg + ci;
+        float wc = weight[c];
+        for (unsigned int hw = 0; hw < HW; hw++) {
+            unsigned int idx = base + ci * HW + hw;
+            float xhat = (input[idx] - m) * rs;
+            float dxh = grad_out[idx] * wc;
+            sum_dxhat += dxh;
+            sum_dxhat_xhat += dxh * xhat;
+        }
+    }
+    // Pass 2: compute grad_input
+    for (unsigned int ci = 0; ci < cpg; ci++) {
+        unsigned int c = g * cpg + ci;
+        float wc = weight[c];
+        for (unsigned int hw = 0; hw < HW; hw++) {
+            unsigned int idx = base + ci * HW + hw;
+            float xhat = (input[idx] - m) * rs;
+            float dxh = grad_out[idx] * wc;
+            grad_input[idx] = rs * inv_M * ((float)M * dxh - sum_dxhat - xhat * sum_dxhat_xhat);
+        }
+    }
 }
 """
 
@@ -32,7 +59,7 @@ def init_once():
     total = x.numel()
     return {"kernel_source": KERNEL_SRC, "inputs": [grad, x.detach(), mean, rstd, w],
             "expected": [result[0].flatten()],
-            "outputs": ["float32;n=%d" % total], "grid": ((total + 255) // 256,), "atol": 1e-2}
+            "outputs": ["float32;n=%d" % total], "grid": (NN * GG,), "block": (1,), "atol": 1e-2}
 
 def run(inputs, kernel):
     total = inputs[0].numel()

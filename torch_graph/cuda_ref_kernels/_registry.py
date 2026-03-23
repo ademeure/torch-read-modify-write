@@ -2150,14 +2150,14 @@ _FILE_OPS = {
                                   _seeded((d["d0"],1), s+200), _seeded((d["d0"],1), s+300), _seeded((d["d1"],), s+400)],
         "aten": lambda inp: [torch.ops.aten.native_layer_norm_backward.default(
             inp[0], inp[1], [inp[1].shape[-1]], inp[2], inp[3], inp[4], torch.zeros_like(inp[4]),
-            [True,True,True])[0].flatten()], "atol": 1e10, "fuzz_atol": 1e18},
+            [True,True,True])[0].flatten()], "atol": 1e-2, "fuzz_atol": 1e18},
     "native_group_norm_backward": {"dims": {"N": 2, "C": 8, "H": 4, "W": 4, "G": 4},
         "inputs": lambda d, s: [_seeded((d["N"],d["C"],d["H"],d["W"]), s),
                                   _seeded((d["N"],d["C"],d["H"],d["W"]), s+100),
                                   _seeded((d["N"],d["G"]), s+200), _seeded((d["N"],d["G"]), s+300),
                                   _seeded((d["C"],), s+400)],
         "aten": lambda inp: [torch.ops.aten.native_group_norm_backward.default(
-            inp[0], inp[1], inp[2], inp[3], inp[4], 2, 8, 16, 4, [True,True,True])[0].flatten()], "atol": 1e10, "fuzz_atol": 1e17},
+            inp[0], inp[1], inp[2], inp[3], inp[4], 2, 8, 16, 4, [True,True,True])[0].flatten()], "atol": 1e-2, "fuzz_atol": 1e16},
 }
 
 for _name, _cfg in _FILE_OPS.items():

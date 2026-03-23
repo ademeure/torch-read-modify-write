@@ -8,14 +8,29 @@ extern "C" __global__ void aten_layer_norm_bwd(
     const float *weight, float *grad_input,
     unsigned int rows, unsigned int cols
 ) {
-    unsigned int idx = blockIdx.x * blockDim.x + threadIdx.x;
-    if (idx >= rows * cols) return;
-    unsigned int row = idx / cols, col = idx % cols;
-    float go = grad_out[idx];
-    float x_hat = (input[idx] - mean[row]) * rstd[row];
-    // Simplified: just weight * rstd * grad_out (ignoring mean/var grad terms)
-    // This is the dominant term and matches for single-element verification
-    grad_input[idx] = go * weight[col] * rstd[row];
+    // Full 3-term backward: dx = (rstd/N) * (N*dy*w - sum(dy*w) - x_hat*sum(dy*w*x_hat))
+    unsigned int row = blockIdx.x;
+    if (row >= rows) return;
+    float m = mean[row];
+    float rs = rstd[row];
+    float inv_N = 1.0f / (float)cols;
+    const float *go = grad_out + row * cols;
+    const float *x = input + row * cols;
+    float *dx = grad_input + row * cols;
+    // Pass 1: compute sum(dy*w) and sum(dy*w*x_hat)
+    float sum_dxhat = 0.0f, sum_dxhat_xhat = 0.0f;
+    for (unsigned int j = 0; j < cols; j++) {
+        float xhat = (x[j] - m) * rs;
+        float dxh = go[j] * weight[j];
+        sum_dxhat += dxh;
+        sum_dxhat_xhat += dxh * xhat;
+    }
+    // Pass 2: compute grad_input
+    for (unsigned int j = 0; j < cols; j++) {
+        float xhat = (x[j] - m) * rs;
+        float dxh = go[j] * weight[j];
+        dx[j] = rs * inv_N * ((float)cols * dxh - sum_dxhat - xhat * sum_dxhat_xhat);
+    }
 }
 """
 
@@ -26,11 +41,10 @@ def init_once():
     out, mean, rstd = torch.ops.aten.native_layer_norm.default(x, [64], w, b, 1e-5)
     grad = torch.randn_like(out)
     result = torch.ops.aten.native_layer_norm_backward.default(grad, x, [64], mean, rstd, w, b, [True, True, True])
-    # Just verify grad_input
     total = x.numel()
     return {"kernel_source": KERNEL_SRC, "inputs": [grad, x.detach(), mean, rstd, w],
             "expected": [result[0].flatten()],
-            "outputs": ["float32;n=%d" % total], "grid": ((total + 255) // 256,), "atol": 1e-2}
+            "outputs": ["float32;n=%d" % total], "grid": (8,), "block": (1,), "atol": 1e-2}
 
 def run(inputs, kernel):
     total = inputs[0].numel()

@@ -14,7 +14,7 @@ extern "C" __global__ void aten_cdist(
     float sum = 0.0f;
     for (unsigned int d = 0; d < D; d++) {
         float diff = x1[b*M*D + m*D + d] - x2[b*N*D + n*D + d];
-        sum += diff * diff;
+        sum += (diff != diff) ? __int_as_float(0x7FC00000) : diff * diff;
     }
     out[idx] = sqrtf(sum);
 }

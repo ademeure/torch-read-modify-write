@@ -25,7 +25,7 @@ extern "C" __global__ void aten_max_pool3d(
                 int id=(int)(od*sD+kd)-(int)pD, ih=(int)(oh*sH+kh)-(int)pH, iw=(int)(ow*sW+kw)-(int)pW;
                 if (id>=0&&id<(int)D&&ih>=0&&ih<(int)H&&iw>=0&&iw<(int)W) {
                     float v = input[n*C*D*H*W + c*D*H*W + id*H*W + ih*W + iw];
-                    if (v > best) best = v;
+                    if (v > best || v != v) best = v;
                 }
             }
     output[idx] = best;

@@ -23,8 +23,10 @@ extern "C" __global__ void aten_upsample_bilinear2d(
     int h0 = (int)floorf(h), w0 = (int)floorf(w);
     float hf = h - h0, wf = w - w0;
     int h1 = h0 + 1, w1 = w0 + 1;
-    if (h0 < 0) h0 = 0; if (h1 >= (int)iH) h1 = iH - 1;
-    if (w0 < 0) w0 = 0; if (w1 >= (int)iW) w1 = iW - 1;
+    if (h0 < 0) h0 = 0; if (h0 >= (int)iH) h0 = (int)iH - 1;
+    if (h1 < 0) h1 = 0; if (h1 >= (int)iH) h1 = (int)iH - 1;
+    if (w0 < 0) w0 = 0; if (w0 >= (int)iW) w0 = (int)iW - 1;
+    if (w1 < 0) w1 = 0; if (w1 >= (int)iW) w1 = (int)iW - 1;
     unsigned int base = n*C*iH*iW + c*iH*iW;
     output[idx] = (1-hf)*(1-wf)*input[base + h0*iW + w0]
                 + (1-hf)*wf*input[base + h0*iW + w1]

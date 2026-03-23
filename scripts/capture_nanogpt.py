@@ -317,6 +317,78 @@ if device.type == "cuda":
         enriched_aten_path = os.path.join(OUTPUT_DIR, "nanogpt_aten_with_triton.py")
         export_aten_program(capture_enriched, enriched_aten_path)
         print(f"  Enriched aten export: {enriched_aten_path}")
+
+        # ── Phase 11: Combined Triton + H5 HTML ──────────────────────
+        print("\n" + "=" * 70)
+        print(" Phase 11: Combined Triton + H5 HTML")
+        print("=" * 70)
+
+        from torch_graph.triton import build_kernel_node_map
+        from torch_graph.op_dump import _build_triton_call_map
+
+        # Compute tensor stats from enriched capture
+        enriched_fw_stats = (compute_tensor_stats(capture_enriched.forward_intermediates)
+                             if capture_enriched.forward_intermediates else None)
+        enriched_bw_stats = (compute_tensor_stats(capture_enriched.backward_intermediates)
+                             if capture_enriched.backward_intermediates else None)
+
+        # Dump H5 from enriched capture (includes triton grouping)
+        enriched_h5_path = os.path.join(OUTPUT_DIR, "nanogpt_enriched.h5")
+        dump_grouped_tensors(
+            capture_enriched, enriched_h5_path,
+            group_by=["line", "module", "triton"],
+            which="both",
+            include_params=True,
+            stats=True,
+            replay_scripts=True,
+            scripts_dir=os.path.join(OUTPUT_DIR, "nanogpt_enriched_scripts"),
+        )
+        print(f"  Enriched H5: {enriched_h5_path}")
+
+        # Build kernel mapping for the visualizer
+        kernel_mapping = build_kernel_node_map(capture_enriched, capture_enriched.triton_capture)
+        call_map = _build_triton_call_map(capture_enriched)
+        vis_kernel_map = call_map if call_map else kernel_mapping.node_to_kernel
+        vis_kernel_details = kernel_mapping.kernel_details
+
+        enriched_fg = capture_enriched.forward_graphs[0]
+        enriched_bw = capture_enriched.backward_graphs[0] if capture_enriched.backward_graphs else None
+
+        # Forward: Triton + H5
+        combined_html_path = os.path.join(OUTPUT_DIR, "nanogpt_triton_h5web.html")
+        GraphVisualizer(enriched_fg).save_html(
+            combined_html_path,
+            title="NanoGPT Forward (Triton + H5)",
+            tensor_stats=enriched_fw_stats,
+            backward_source=enriched_bw,
+            bw_tensor_stats=enriched_bw_stats,
+            kernel_map=vis_kernel_map,
+            kernel_details=vis_kernel_details,
+            embed_h5=enriched_h5_path,
+        )
+        print(f"  Combined Triton+H5 HTML: {combined_html_path}")
+
+        # Backward: Triton + H5
+        if enriched_bw and capture_enriched.backward_triton_capture:
+            bw_kernel_mapping = build_kernel_node_map(
+                capture_enriched, capture_enriched.backward_triton_capture
+            )
+            from torch_graph.op_dump import _build_backward_triton_call_map
+            bw_call_map = _build_backward_triton_call_map(capture_enriched)
+            bw_vis_kernel_map = bw_call_map if bw_call_map else bw_kernel_mapping.node_to_kernel
+            bw_vis_kernel_details = bw_kernel_mapping.kernel_details
+
+            bw_combined_html_path = os.path.join(OUTPUT_DIR, "nanogpt_backward_triton_h5web.html")
+            GraphVisualizer(enriched_bw).save_html(
+                bw_combined_html_path,
+                title="NanoGPT Backward (Triton + H5)",
+                tensor_stats=enriched_bw_stats,
+                kernel_map=bw_vis_kernel_map,
+                kernel_details=bw_vis_kernel_details,
+                embed_h5=enriched_h5_path,
+            )
+            print(f"  Backward Triton+H5 HTML: {bw_combined_html_path}")
+
     except Exception as e:
         print(f"  Enriched capture failed: {e}")
         import traceback; traceback.print_exc()

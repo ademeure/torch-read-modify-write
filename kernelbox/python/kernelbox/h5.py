@@ -483,9 +483,8 @@ def dump_diff(path, expected, actual, names=None, inputs=None,
         expected: List of expected tensors.
         actual:   List of actual output tensors.
         names:    Optional output names (default ``output_0``, ...).
-        inputs:   Optional inputs (list, dict, or NamedInputs) for ``max`` mode.
-        mode:     ``"min"`` = only failed outputs, ``"max"`` = all outputs + inputs.
-                  ``None`` = all outputs (legacy default).
+        inputs:   Optional inputs (list, dict, or NamedInputs) — prepended to output.
+        mode:     ``"min"`` = only failed outputs.  Default = all outputs + stats + inputs.
         atol:     Absolute tolerance (for ``min`` filtering).
         rtol:     Relative tolerance (for ``min`` filtering).
 
@@ -520,17 +519,17 @@ def dump_diff(path, expected, actual, names=None, inputs=None,
                 filtered.append((name, tensors, meta))
         groups = filtered
 
-    # max mode: add stats to outputs, prepend input tensors
-    if mode == "max":
+    # Add stats to outputs and prepend input tensors
+    if mode != "min":
         for _name, tensors, meta in groups:
             for prefix in ("expected", "actual"):
                 if prefix in tensors:
                     stats = _tensor_stats(tensors[prefix])
                     for k, v in stats.items():
                         meta[f"{prefix}_{k}"] = v
-        if inputs is not None:
-            input_groups = _build_input_groups(inputs)
-            groups = input_groups + groups
+    if inputs is not None:
+        input_groups = _build_input_groups(inputs)
+        groups = input_groups + groups
 
     if ext in _PT_EXTS:
         _dump_diff_pt(path, groups)
@@ -560,7 +559,7 @@ def _build_input_groups(inputs):
         t_cpu = t.detach().float().cpu()
         meta = {"shape": list(t.shape), "dtype": str(t.dtype)}
         meta.update(_tensor_stats(t_cpu))
-        groups.append((name, {"data": t_cpu}, meta))
+        groups.append((name, {"_flat": t_cpu}, meta))
 
     if isinstance(inputs, (list, tuple)):
         for i, t in enumerate(inputs):
@@ -583,17 +582,26 @@ def _dump_diff_h5(path, groups):
 
     with h5py.File(path, "w") as f:
         for name, tensors, meta in groups:
-            g = f.create_group(name)
-            for k, v in tensors.items():
-                g.create_dataset(k, data=v.numpy())
-            for k, v in meta.items():
-                g.attrs[k] = v
+            if "_flat" in tensors:
+                # Single tensor — store as dataset, not group
+                ds = f.create_dataset(name, data=tensors["_flat"].numpy())
+                for k, v in meta.items():
+                    ds.attrs[k] = v
+            else:
+                g = f.create_group(name)
+                for k, v in tensors.items():
+                    g.create_dataset(k, data=v.numpy())
+                for k, v in meta.items():
+                    g.attrs[k] = v
 
 
 def _dump_diff_pt(path, groups):
     data = {}
     for name, tensors, meta in groups:
-        data[name] = {**tensors, **meta}
+        if "_flat" in tensors:
+            data[name] = tensors["_flat"]
+        else:
+            data[name] = {**tensors, **meta}
     torch.save(data, path)
 
 

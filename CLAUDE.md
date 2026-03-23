@@ -44,6 +44,9 @@ Models with graph breaks (e.g. HF GPT2 with DynamicCache) produce 2+ forward/bac
 ### Standalone training loop generation
 `torch_graph/standalone.py` generates self-contained training scripts from captured aten graphs. After step 1 captures fw/bw/opt, `save_standalone_training()` saves initial params + optimizer state + a Python script that runs the full training loop using only aten files — no original model or optimizer code needed. Supports both monolithic optimizers (AdamW via slot_info) and inner-fn optimizers (MuonAdamW via serialized replay plan). Dynamic shapes are handled by resolving concrete SymInt values from sample inputs. CLI: `--verify N` generates and runs a standalone verification loop.
 
+### CUDA reference kernel registry
+`torch_graph/cuda_ref_kernels/` contains 220 hand-written CUDA kernels — one per Core Aten IR op. `_registry.py` is the single source of truth: each op entry defines `kernel` (CUDA source), `aten` (reference callable), `inputs` (generator taking dims + seed), `dims` (fuzzable dimensions), and `dispatch` (usually "auto"). Individual `aten_*.py` files provide complex ops needing custom dispatch. Testing via `kbox batch --registry` verifies all ops with multiple seeds (special values at seed=0, random at seed>0) and size fuzzing.
+
 ### Bit-identical capture
 Captured aten graphs produce bit-identical forward outputs and gradients vs eager execution, including with Flash Attention 3 on Hopper GPUs. This is verified in tests.
 
@@ -70,7 +73,7 @@ Recipe file is `recipes/nanochat_wrapper.py` (not `nanochat.py`) to avoid name c
 ```bash
 make test                                     # All tests
 make test-quick                               # Fast (skip nanochat, NanoGPT)
-.venv/bin/python -m pytest tests/ -v          # 121 pytest tests, ~80s
+.venv/bin/python -m pytest tests/ -v          # pytest suite, ~80s
 .venv/bin/python -m pytest tests/test_auto_install.py::test_single_linear -v  # Single test
 .venv/bin/python -m pytest tests/ -v -k "optimizer"  # Tests matching keyword
 .venv/bin/python run_tests.py                 # Tensor verification suite
@@ -79,10 +82,11 @@ make test-quick                               # Fast (skip nanochat, NanoGPT)
 ```
 
 See `TESTS.md` for full test documentation: per-file test tables, coverage gaps, nanochat cache setup, and verification levels. Key test categories:
-- **pytest** (`tests/`): 128+ tests — auto_install, install, multi-step, triton, H5, IR JSON, visualizer, inductor comparison, optimizer replay, MuonAdamW inner-fn capture, autoresearch E2E, nanochat E2E, standalone training loops, safety checks
+- **pytest** (`tests/`): auto_install, install, multi-step, triton, H5, IR JSON, visualizer, inductor comparison, optimizer replay, MuonAdamW inner-fn capture, autoresearch E2E, nanochat E2E, standalone training loops, uniquify, aten-to-cuda, cuda_inline, safety checks
 - **run_tests.py**: Tensor verification (determinism, E2E accuracy, dynamic shapes, op dump)
 - **test_models.py**: 80 model recipes (basic→HuggingFace) via `extract_training_step` + subprocess verification
 - **test_fixes.py**: 52 legacy integration tests for historical fixes
+- **kbox batch --registry**: Runs all 220 aten ref kernels from `cuda_ref_kernels/_registry.py` with multi-seed + size fuzz
 
 ### Key files to understand
 - `torch_graph/auto_install.py` — The main workflow. Patches `torch.compile`, dispatches by variant (train/eval/arg pattern), caches to disk.
@@ -95,7 +99,17 @@ See `TESTS.md` for full test documentation: per-file test tables, coverage gaps,
 - `torch_graph/internal_ir.py` — Internal IR data structures shared by ir_json and condense_ir.
 - `torch_graph/explain.py` — `explain()` one-liner API: capture + inspect + optional verify.
 - `torch_graph/extract.py` — `extract_function()` / `extract_training_step()`: capture from arbitrary callables or training loops.
+- `torch_graph/uniquify.py` — Unified uniquification engine: deduplicates repeated sub-graphs in IR JSON (module-tree or source-line grouping).
+- `torch_graph/editor.py` — `GraphEditor`: mutable FX graph editing with undo (replace/remove/insert ops, then recompile).
+- `torch_graph/custom_ops.py` — Tracks custom op registrations (Library, load_library, C++ extensions) so exported aten files can reproduce them.
+- `torch_graph/aten_to_cuda.py` — Converts aten op sequences to fused inline CUDA kernels (elementwise fusion, barrier detection).
+- `torch_graph/cuda_inline.py` — `load_cuda()`: compiles and caches inline CUDA/C++ kernels for use in modified aten `.py` files.
+- `torch_graph/kbox_gen.py` — Generates kernelbox-compatible test scripts from H5 tensor dumps.
+- `torch_graph/cuda_ref_kernels/_registry.py` — Single source of truth for 220 aten reference CUDA kernels (inputs, expected, tolerances, dispatch).
 - `scripts/capture_nanochat.py` — Full nanochat capture: aten + HTML + H5 + kbox.
+
+### Subsystems
+- `kernelbox/` — CUDA kernel development toolkit (iterate-only, hot-reload). Has its own `kernelbox/CLAUDE.md` with architecture details.
 
 ### Documentation
 - `docs/EXTRACT_MODIFY_RUN.md` — How to extract aten graphs, edit them, and run with modifications (succinct + in-depth)

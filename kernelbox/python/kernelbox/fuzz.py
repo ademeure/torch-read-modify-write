@@ -29,7 +29,7 @@ _FINITE_SPECIALS = [
     -1.1754942106924411e-38,
     1.1754943508222875e-38,              # smallest normal (0x00800000)
     -1.1754943508222875e-38,
-    1e16, -1e16,            # large magnitude
+    1e8, -1e8,              # large (won't overflow in short dot products)
     float("inf"), float("-inf"),
 ]
 

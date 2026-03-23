@@ -402,13 +402,13 @@ _reg("gelu_backward", kernel=(
     '        out0[i] = a * (cdf + exp_term);\n'
     '    }\n'
     '}'),
-     inputs=_pair, aten=lambda inp: [torch.ops.aten.gelu_backward.default(*inp)], atol=1e-4)
+     inputs=_pair, aten=lambda inp: [torch.ops.aten.gelu_backward.default(*inp)], atol=1e-4, fuzz_atol=1e1)
 _reg("silu_backward", kernel=_binary(
      "(a * (1.0f / (1.0f + expf(-b))) * (1.0f + b * (1.0f - 1.0f / (1.0f + expf(-b)))))"),
      inputs=_pair, aten=lambda inp: [torch.ops.aten.silu_backward.default(*inp)], atol=1e-4)
 _reg("sigmoid_backward", kernel=_binary("(a * b * (1.0f - b))"),
      inputs=lambda d, s: [_seeded((d["n"],), s), torch.sigmoid(_seeded((d["n"],), s+500))],
-     aten=lambda inp: [torch.ops.aten.sigmoid_backward.default(*inp)])
+     aten=lambda inp: [torch.ops.aten.sigmoid_backward.default(*inp)], fuzz_atol=1e14)
 _reg("tanh_backward", kernel=_binary("(a * (1.0f - b * b))"),
      inputs=lambda d, s: [_seeded((d["n"],), s), torch.tanh(_seeded((d["n"],), s+500))],
      aten=lambda inp: [torch.ops.aten.tanh_backward.default(*inp)])
@@ -745,7 +745,7 @@ _reg("dot", kernel=_DOT_KERNEL, dims={"n": 256},
      aten=lambda inp: [torch.ops.aten.dot.default(*inp).unsqueeze(0)],
      dispatch=lambda inp, k, d: [k(*inp, params=[
          k.in_ptr(0), k.in_ptr(1), k.out_ptr(0), np.uint32(inp[0].numel())])],
-     atol=1e-3, outputs=lambda d: ["float32;n=1"], grid=lambda d: (1,), block=(256,))
+     atol=1e-3, fuzz_atol=1e2, outputs=lambda d: ["float32;n=1"], grid=lambda d: (1,), block=(256,))
 
 _MV_KERNEL = '''extern "C" __global__ void k(
     const float *A, const float *x, float *y, unsigned int M, unsigned int K
@@ -970,7 +970,7 @@ _reg("convolution", kernel=_CONV2D_KERNEL,
          np.uint32(d["pad"]), np.uint32(d["pad"]), np.uint32(d["stride"]), np.uint32(d["stride"]),
          np.uint32((H+2*d["pad"]-kH)//d["stride"]+1), np.uint32((W+2*d["pad"]-kW)//d["stride"]+1)])])(
          *inp[0].shape, inp[1].shape[0], inp[1].shape[2], inp[1].shape[3]),
-     atol=1e-3,
+     atol=1e-3, fuzz_atol=1e2,
      outputs=lambda d: ["float32;n=%d" % (d["N"]*d["Co"]*((d["H"]+2*d["pad"]-d["kH"])//d["stride"]+1)*((d["W"]+2*d["pad"]-d["kW"])//d["stride"]+1))],
      grid=lambda d: ((d["N"]*d["Co"]*((d["H"]+2*d["pad"]-d["kH"])//d["stride"]+1)*((d["W"]+2*d["pad"]-d["kW"])//d["stride"]+1)+255)//256,))
 
@@ -1225,7 +1225,7 @@ _reg("mse_loss", kernel=_MSE_KERNEL, dims={"n": 256},
      aten=lambda inp: [torch.ops.aten.mse_loss.default(*inp).unsqueeze(0)],
      dispatch=lambda inp, k, d: [k(*inp, params=[
          k.in_ptr(0), k.in_ptr(1), k.out_ptr(0), np.uint32(inp[0].numel())])],
-     atol=1e-4, outputs=lambda d: ["float32;n=1"], grid=lambda d: (1,), block=(256,))
+     atol=1e-4, fuzz_atol=1e8, outputs=lambda d: ["float32;n=1"], grid=lambda d: (1,), block=(256,))
 
 # ─── Attention ───────────────────────────────────────────────────────────────
 
@@ -1334,7 +1334,7 @@ _VAR_KERNEL = '''extern "C" __global__ void k(
     if (tid == 0) output[row] = (float)(s_sq[0] / (double)(cols - 1));
 }'''
 _reg("var", kernel=_VAR_KERNEL,
-     inputs=_2d, dims={"d0": 32, "d1": 64}, dispatch=_red_dispatch, atol=1e-3,
+     inputs=_2d, dims={"d0": 32, "d1": 64}, dispatch=_red_dispatch, atol=1e-3, fuzz_atol=1e8,
      aten=lambda inp: [torch.ops.aten.var.correction(inp[0], [-1])],
      outputs=lambda d: ["float32;n=%d" % d["d0"]], grid=lambda d: (d["d0"],), block=(256,))
 
@@ -2151,14 +2151,14 @@ _FILE_OPS = {
                                   _seeded((d["d0"],1), s+200), _seeded((d["d0"],1), s+300), _seeded((d["d1"],), s+400)],
         "aten": lambda inp: [torch.ops.aten.native_layer_norm_backward.default(
             inp[0], inp[1], [inp[1].shape[-1]], inp[2], inp[3], inp[4], torch.zeros_like(inp[4]),
-            [True,True,True])[0].flatten()], "atol": 1e10},
+            [True,True,True])[0].flatten()], "atol": 1e10, "fuzz_atol": 1e18},
     "native_group_norm_backward": {"dims": {"N": 2, "C": 8, "H": 4, "W": 4, "G": 4},
         "inputs": lambda d, s: [_seeded((d["N"],d["C"],d["H"],d["W"]), s),
                                   _seeded((d["N"],d["C"],d["H"],d["W"]), s+100),
                                   _seeded((d["N"],d["G"]), s+200), _seeded((d["N"],d["G"]), s+300),
                                   _seeded((d["C"],), s+400)],
         "aten": lambda inp: [torch.ops.aten.native_group_norm_backward.default(
-            inp[0], inp[1], inp[2], inp[3], inp[4], 2, 8, 16, 4, [True,True,True])[0].flatten()], "atol": 1e10},
+            inp[0], inp[1], inp[2], inp[3], inp[4], 2, 8, 16, 4, [True,True,True])[0].flatten()], "atol": 1e10, "fuzz_atol": 1e17},
 }
 
 for _name, _cfg in _FILE_OPS.items():

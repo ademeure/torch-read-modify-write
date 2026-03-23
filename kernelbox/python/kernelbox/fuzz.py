@@ -1,13 +1,13 @@
 """Universal input fuzzer for kbox test files.
 
-Generates variant inputs from baseline shapes: seeded randn with special
-float values (NaN, inf, subnormals, zeros, boundary) injected at random
-positions. Always tests both with and without NaN/inf.
+Three modes per seed, yielded in order:
+  fuzz_N  — randn + all specials (NaN/inf/subnormals/boundary) injected
+  safe_N  — randn + safe specials only (no NaN/inf)
+  rand_N  — pure randn, no specials at all
 
-The guarantee region uses cross-product indexing across float inputs so
-that for binary ops, ALL pairs of special values are tested (not just
-the diagonal). For 27 specials and 2 inputs: 729 combinations in the
-first 729 elements.
+Cross-product guarantee region covers all combinations of special values
+across float inputs (e.g. 27^2=729 for binary ops). Offset by seed so
+different seeds test the cross-product against different random neighbors.
 
     from kernelbox.fuzz import fuzz_inputs
     for label, variant in fuzz_inputs(baseline_inputs, seeds=10):
@@ -33,17 +33,15 @@ SAFE_SPECIAL_VALUES = [v for v in SPECIAL_VALUES
 
 
 def fuzz_inputs(baseline_inputs, seeds=10):
-    """Yield (label, variant_inputs) pairs. Total = 2 * seeds.
+    """Yield (label, variant_inputs) pairs. Total = 3 * seeds.
 
-    Each seed yields two variants: full specials (with NaN/inf) and safe
-    (without). Non-float tensors are cloned unchanged.
-
-    The guarantee region covers the full cross-product of special values
-    across all float inputs (e.g. 27^2 = 729 positions for binary ops).
+    Each seed yields three variants: full specials, safe specials, pure
+    random. Non-float tensors are cloned unchanged.
     """
     for seed in range(seeds):
         yield _gen(baseline_inputs, seed, SPECIAL_VALUES, "fuzz")
         yield _gen(baseline_inputs, seed, SAFE_SPECIAL_VALUES, "safe")
+        yield _gen_rand(baseline_inputs, seed)
 
 
 def _gen(baseline, seed, specials, prefix):
@@ -69,15 +67,41 @@ def _gen(baseline, seed, specials, prefix):
         idx = torch.randint(ns, flat.shape, device=device, generator=g)
         flat[mask] = s[idx[mask]]
 
-        # Cross-product guarantee: input j uses stride ns^j, so all
-        # combinations across inputs appear in the first ns^(j+1) positions.
-        # Binary op with 27 specials: 729 positions cover all pairs.
+        # Cross-product guarantee: input j uses stride ns^j, covering all
+        # combinations across inputs. Offset by seed so different seeds
+        # place the guarantee against different random neighborhoods.
         stride = ns ** float_idx
         guarantee_len = min(ns * stride, n)
+        offset = (seed * guarantee_len) % n
         positions = torch.arange(guarantee_len, device=device)
-        flat[:guarantee_len] = s[(positions // stride) % ns]
+        values = s[(positions // stride) % ns]
+        # Write with wraparound
+        end = offset + guarantee_len
+        if end <= n:
+            flat[offset:end] = values
+        else:
+            split = n - offset
+            flat[offset:] = values[:split]
+            flat[:end - n] = values[split:]
 
         float_idx += 1
         variant.append(flat.view(t.shape))
 
     return (f"{prefix}_{seed}", variant)
+
+
+def _gen_rand(baseline, seed):
+    """Pure randn, no specials. Tests normal-range computation."""
+    device = baseline[0].device if baseline else "cuda"
+    # Use a distinct seed space so rand variants differ from fuzz/safe
+    g = torch.Generator(device=device).manual_seed(seed + 1_000_000)
+
+    variant = []
+    for t in baseline:
+        if not t.is_floating_point():
+            variant.append(t.clone())
+            continue
+        variant.append(torch.randn(t.shape, dtype=t.dtype, device=t.device,
+                                   generator=g))
+
+    return (f"rand_{seed}", variant)

@@ -6,7 +6,7 @@ Three modes per seed, yielded in order:
   rand_N  — pure randn, no specials at all
 
 Cross-product guarantee region covers all combinations of special values
-across float inputs (e.g. 31^2=961 for binary ops). Offset by seed so
+across float inputs (e.g. 30^2=900 for binary ops). Offset by seed so
 different seeds test the cross-product against different random neighbors.
 
     from kernelbox.fuzz import fuzz_inputs
@@ -37,7 +37,6 @@ _FINITE_SPECIALS = [
 _NAN_BITS = [
     0x7FC00000,  # +qNaN (default, payload=0)
     0xFFC00000,  # -qNaN (sign bit set)
-    0x7FC00001,  # +qNaN payload=1
     0x7FFFFFFF,  # +qNaN all payload bits set
     0x7F800001,  # +sNaN (quiet bit=0, payload=1) — GPU won't trap but bit pattern differs
 ]

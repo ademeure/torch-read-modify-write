@@ -408,8 +408,7 @@ _reg("silu_backward", kernel=_binary(
      inputs=_pair, aten=lambda inp: [torch.ops.aten.silu_backward.default(*inp)], atol=1e-4)
 _reg("sigmoid_backward", kernel=_binary("(a * b * (1.0f - b))"),
      inputs=lambda d, s: [_seeded((d["n"],), s), torch.sigmoid(_seeded((d["n"],), s+500))],
-     aten=lambda inp: [torch.ops.aten.sigmoid_backward.default(*inp)],
-     fuzz_atol=1e30)  # fuzz puts b outside [0,1]
+     aten=lambda inp: [torch.ops.aten.sigmoid_backward.default(*inp)])
 _reg("tanh_backward", kernel=_binary("(a * (1.0f - b * b))"),
      inputs=lambda d, s: [_seeded((d["n"],), s), torch.tanh(_seeded((d["n"],), s+500))],
      aten=lambda inp: [torch.ops.aten.tanh_backward.default(*inp)])
@@ -1428,8 +1427,7 @@ _reg("topk", kernel=_TOPK_KERNEL,
          k.in_ptr(0), k.out_ptr(0),
          np.uint32(inp[0].shape[0]), np.uint32(inp[0].shape[1]), np.uint32(d["k"])])],
      outputs=lambda d: ["float32;n=%d" % (d["d0"]*d["k"])],
-     grid=lambda d: (d["d0"],), block=(1,),
-     fuzz_atol=1e30)  # NaN comparison in iterative top-k selection
+     grid=lambda d: (d["d0"],), block=(1,))
 
 # Log softmax
 _LOG_SOFTMAX_KERNEL = _SOFTMAX_KERNEL.replace(

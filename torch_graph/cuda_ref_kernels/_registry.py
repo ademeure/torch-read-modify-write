@@ -1053,7 +1053,6 @@ _BATCH_NORM_KERNEL = '''extern "C" __global__ void k(
     unsigned int c = (idx / HW) % C;
     double rstd = rsqrt((double)var[c] + (double)eps);
     double normed = ((double)input[idx] - (double)mean[c]) * rstd;
-    if (!isfinite(normed)) normed = 0.0;
     output[idx] = (float)(normed * (double)weight[c] + (double)bias[c]);
 }'''
 
@@ -1246,7 +1245,7 @@ _SDPA_KERNEL = '''extern "C" __global__ void k(
         for (unsigned int kk = 0; kk < D; kk++)
             qk += Q[b*H*S*D + h*S*D + s*D + kk] * K[b*H*S*D + h*S*D + j*D + kk];
         qk *= scale;
-        if (isnan(qk)) qk = -1e38f;
+        qk *= scale;
         if (qk > max_qk) max_qk = qk;
     }
     float sum_exp = 0.0f, weighted_v = 0.0f;
@@ -1255,12 +1254,11 @@ _SDPA_KERNEL = '''extern "C" __global__ void k(
         for (unsigned int kk = 0; kk < D; kk++)
             qk += Q[b*H*S*D + h*S*D + s*D + kk] * K[b*H*S*D + h*S*D + j*D + kk];
         qk *= scale;
-        if (isnan(qk)) qk = -1e38f;
         float w = expf(qk - max_qk);
         sum_exp += w;
         weighted_v += w * V[b*H*S*D + h*S*D + j*D + d];
     }
-    if (isnan(sum_exp) || sum_exp == 0.0f) { output[idx] = 0.0f; return; }
+    if (sum_exp == 0.0f) { output[idx] = 0.0f; return; }
     output[idx] = weighted_v / sum_exp;
 }'''
 

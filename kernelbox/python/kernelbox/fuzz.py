@@ -34,7 +34,7 @@ _FINITE_SPECIALS = [
 _NAN_BITS = [
     0x7FC00000,  # +qNaN (default, payload=0)
     0xFFC00000,  # -qNaN (sign bit set)
-    0x7FC00001,  # +qNaN payload=1
+    0x7F800001,  # +sNaN payload=1 (quiet bit=0, won't trap on GPU but bit pattern differs)
     0x7FFFFFFF,  # +qNaN all payload bits set
 ]
 

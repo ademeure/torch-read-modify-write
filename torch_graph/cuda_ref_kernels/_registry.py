@@ -564,10 +564,10 @@ _LERP_KERNEL = '''extern "C" __global__ void k(
     unsigned int i = blockIdx.x * blockDim.x + threadIdx.x;
     if (i < n) {
         float ai = a[i], bi = b[i], wi = w[i], d = bi - ai;
-        // Two-formula lerp matching PyTorch: anchors to nearer endpoint
-        // to avoid catastrophic cancellation. Boundary at |w|<0.5 (strict).
-        // Compiles to predicated FMA — no branch in PTX/SASS.
-        out[i] = (fabsf(wi) < 0.5f) ? (ai + wi * d) : (bi - (1.0f - wi) * d);
+        // Two-formula lerp matching PyTorch exactly (bit-identical via FMA).
+        // |w|<0.5: fma(w, b-a, a)  |w|>=0.5: fma(-(1-w), b-a, b)
+        out[i] = (fabsf(wi) < 0.5f) ? __fmaf_rn(wi, d, ai)
+                                     : __fmaf_rn(-(1.0f - wi), d, bi);
     }
 }'''
 _reg("lerp", kernel=_LERP_KERNEL,

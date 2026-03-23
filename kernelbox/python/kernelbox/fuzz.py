@@ -93,13 +93,14 @@ def _gen(baseline, seed, specials_f32, prefix):
         flat[mask] = s[idx[mask]]
 
         # Cross-product guarantee: input j uses stride ns^j, covering all
-        # combinations across inputs. Offset by seed so different seeds
-        # place the guarantee against different random neighborhoods.
+        # combinations across inputs. Seed rotates both position (offset)
+        # and values (shift) so different seeds test different cross-product
+        # slices against different random neighborhoods.
         stride = ns ** float_idx
         guarantee_len = min(ns * stride, n)
-        offset = (seed * guarantee_len) % n
+        offset = (seed * guarantee_len) % n if guarantee_len < n else 0
         positions = torch.arange(guarantee_len, device=device)
-        values = s[(positions // stride) % ns]
+        values = s[((positions // stride) + seed) % ns]
         # Write with wraparound
         end = offset + guarantee_len
         if end <= n:

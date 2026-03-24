@@ -17,6 +17,7 @@ Test runner calls:
   result = op["dispatch"](inputs, kernel)  # CUDA kernel output
   verify(result, expected, op["atol"])
 """
+import os
 import torch
 import numpy as np
 
@@ -2208,6 +2209,60 @@ for _name, _cfg in _FILE_OPS.items():
         pass
     except Exception as e:
         pass  # file may not exist yet after regeneration
+
+
+# ═════════════════════════════════════════════════════════════════════════════
+#  Self-registering file discovery
+# ═════════════════════════════════════════════════════════════════════════════
+
+def _auto_register_files():
+    """Scan aten_*.py files for self-registering ops.
+
+    A file self-registers if it exports DIMS, make_inputs, and reference.
+    Files already registered inline (via _reg or _FILE_OPS) are skipped.
+    """
+    import importlib.util
+    _here = os.path.dirname(__file__)
+    for fname in sorted(os.listdir(_here)):
+        if not fname.startswith("aten_") or not fname.endswith(".py"):
+            continue
+        # aten_foo.py → op name "foo", aten__foo.py → "_foo"
+        raw = fname[5:-3]
+        name = ("_" + raw[1:]) if raw.startswith("_") else raw
+        if name in OPS:
+            continue  # already registered inline
+        fpath = os.path.join(_here, fname)
+        spec = importlib.util.spec_from_file_location(f"aten_{raw}", fpath)
+        mod = importlib.util.module_from_spec(spec)
+        try:
+            spec.loader.exec_module(mod)
+        except Exception:
+            continue
+        # Check for self-registration attributes
+        if not all(hasattr(mod, a) for a in ("DIMS", "reference", "make_inputs")):
+            continue
+        run_fn = getattr(mod, "run", None)
+        if run_fn is None:
+            continue
+        _reg(name, kernel=getattr(mod, "KERNEL_SRC", ""),
+             dims=mod.DIMS,
+             inputs=mod.make_inputs,
+             aten=mod.reference,
+             dispatch=lambda inp, k, d, _run=run_fn: _run(inp, k),
+             atol=getattr(mod, "ATOL", 1e-5),
+             fuzz_atol=getattr(mod, "FUZZ_ATOL", None))
+        # Patch outputs/grid/block from init_once if available
+        init_fn = getattr(mod, "init_once", None)
+        if init_fn:
+            try:
+                _state = init_fn()
+                if _state.get("outputs"): OPS[name]["outputs"] = lambda d, _o=_state["outputs"]: _o
+                if _state.get("grid"): OPS[name]["grid"] = lambda d, _g=_state["grid"]: _g
+                if _state.get("block"): OPS[name]["block"] = _state["block"]
+            except Exception:
+                pass
+
+_auto_register_files()
 
 
 # ═════════════════════════════════════════════════════════════════════════════

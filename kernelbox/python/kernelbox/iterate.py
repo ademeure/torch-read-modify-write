@@ -1238,7 +1238,11 @@ def watch_file(test_path, atol=1e-5, rtol=1e-5, interval=0.3, dump=None,
         # Auto-fuzz: if baseline passed and module has reference(), test variants
         if ok and fuzz_seeds and suite is None:
             ref_fn = getattr(rt["mod"], "reference", None)
-            if ref_fn is not None and isinstance(inputs, (list, tuple)):
+            if ref_fn is None:
+                _log(f"Fuzz: skipped (no reference() function in test file)", _DIM)
+            elif not isinstance(inputs, (list, tuple)):
+                _log(f"Fuzz: skipped (dict inputs not supported)", _DIM)
+            else:
                 from .fuzz import fuzz_inputs
                 fuzz_pass = fuzz_fail = 0
                 for label, variant in fuzz_inputs(inputs, seeds=fuzz_seeds):
@@ -1261,7 +1265,7 @@ def watch_file(test_path, atol=1e-5, rtol=1e-5, interval=0.3, dump=None,
                         _log(f"  FUZZ ERROR {label}: {e}", _RED)
                 total = fuzz_pass + fuzz_fail
                 style = _GREEN if fuzz_fail == 0 else _RED
-                _log(f"Fuzz: {fuzz_pass}/{total} passed",
+                _log(f"Fuzz: {fuzz_pass}/{total} passed ({total} variants)",
                      style + _BOLD)
 
         if rt["bench"] and ok:

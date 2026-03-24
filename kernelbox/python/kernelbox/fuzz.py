@@ -5,8 +5,10 @@ Three modes per seed, yielded in order:
   safe_N  — randn + safe specials only (no NaN/inf)
   rand_N  — pure randn, no specials at all
 
+Total variants = 3 * seeds.
+
 Cross-product guarantee region covers all combinations of special values
-across float inputs (e.g. 31^2=961 for binary ops). All float inputs
+across float inputs (e.g. 33^2=1089 for binary ops). All float inputs
 share the same guarantee region so every pair is tested. Seed rotates
 values so different seeds cover different cross-product slices.
 
@@ -20,11 +22,12 @@ from __future__ import annotations
 import math
 import torch
 
-# Non-NaN special float values.
+# Non-NaN special float values (float32).
 _FINITE_SPECIALS = [
     0.0, -0.0, 1.0, -1.0, 0.5, -0.5, 2.0, -2.0, 4.0, -4.0,
     100.0, -100.0, 1e-7, -1e-7, 1e7, -1e7,
-    1e-45, -1e-45,                      # smallest subnormal (0x00000001)
+    1.401298464324817e-45,               # smallest subnormal (0x00000001)
+    -1.401298464324817e-45,
     1.1754942106924411e-38,              # largest subnormal (0x007FFFFF)
     -1.1754942106924411e-38,
     1.1754943508222875e-38,              # smallest normal (0x00800000)
@@ -34,7 +37,9 @@ _FINITE_SPECIALS = [
 ]
 
 # NaN variants with different bit patterns (payload, sign).
-# Built via int32→float32 view to preserve exact bits.
+# Built via numpy uint32→int32 view to preserve exact bits, because
+# Python float can't represent different NaN payloads and torch.tensor()
+# rejects unsigned ints > 2^31-1 for dtype=int32.
 _NAN_BITS = [
     0x7FC00000,  # +qNaN (default, payload=0)
     0xFFC00000,  # -qNaN (sign bit set)
@@ -51,7 +56,6 @@ def _build_specials(device):
     """Build full specials tensor with exact NaN bit patterns."""
     import numpy as np
     finite = torch.tensor(_FINITE_SPECIALS, dtype=torch.float32, device=device)
-    # Use numpy uint32 → torch int32 view to avoid Python int overflow
     nan_np = np.array(_NAN_BITS, dtype=np.uint32).view(np.int32)
     nan_bits = torch.from_numpy(nan_np).to(device)
     nans = nan_bits.view(torch.float32)
@@ -61,10 +65,20 @@ def _build_specials(device):
 def fuzz_inputs(baseline_inputs, seeds=10):
     """Yield (label, variant_inputs) pairs. Total = 3 * seeds.
 
-    Each seed yields three variants: full specials, safe specials, pure
-    random. Non-float tensors are cloned unchanged.
+    Each seed yields three variants: full specials (fuzz_N), safe specials
+    without NaN/inf (safe_N), and pure randn (rand_N).
+
+    Non-float tensors (int indices, bool masks) are cloned unchanged.
+    Only float32 specials are injected — bf16/fp16 inputs get the same
+    specials cast down, which may lose subnormal/boundary precision.
+
+    Requires list/tuple inputs (dict inputs are not supported).
     """
-    device = baseline_inputs[0].device if baseline_inputs else "cuda"
+    if not baseline_inputs:
+        return
+    if not isinstance(baseline_inputs, (list, tuple)):
+        return  # dict inputs not supported
+    device = baseline_inputs[0].device
     all_specials = _build_specials(device)
     safe_specials = torch.tensor(SAFE_SPECIAL_VALUES, dtype=torch.float32,
                                  device=device)
@@ -75,7 +89,7 @@ def fuzz_inputs(baseline_inputs, seeds=10):
 
 
 def _gen(baseline, seed, specials_f32, prefix):
-    device = baseline[0].device if baseline else "cuda"
+    device = baseline[0].device
     g = torch.Generator(device=device).manual_seed(seed)
     ns = len(specials_f32)
     frac = 0.05 + 0.20 * ((seed * 7 + 3) % 11) / 10
@@ -84,7 +98,7 @@ def _gen(baseline, seed, specials_f32, prefix):
     # All float inputs share the same region length so every combination
     # of specials across inputs is covered.
     n_float = sum(1 for t in baseline if t.is_floating_point())
-    full_xprod = ns ** n_float  # e.g. 31^2=961 for binary ops
+    full_xprod = ns ** n_float
 
     variant = []
     float_idx = 0
@@ -93,6 +107,7 @@ def _gen(baseline, seed, specials_f32, prefix):
             variant.append(t.clone())
             continue
 
+        # Note: .to(t.dtype) may lose subnormal/boundary precision for bf16/fp16.
         s = specials_f32.to(t.dtype)
         flat = torch.randn(t.numel(), dtype=t.dtype, device=t.device, generator=g)
         n = flat.numel()
@@ -128,7 +143,7 @@ def _gen(baseline, seed, specials_f32, prefix):
 
 def _gen_rand(baseline, seed):
     """Pure randn, no specials. Tests normal-range computation."""
-    device = baseline[0].device if baseline else "cuda"
+    device = baseline[0].device
     g = torch.Generator(device=device).manual_seed(seed + 1_000_000)
 
     variant = []

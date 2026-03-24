@@ -1330,7 +1330,7 @@ _VAR_KERNEL = '''extern "C" __global__ void k(
     for (unsigned int s = blockDim.x/2; s > 0; s >>= 1) {
         if (tid < s) s_sq[tid] += s_sq[tid+s]; __syncthreads();
     }
-    if (tid == 0) output[row] = (float)(s_sq[0] / (double)(cols - 1));
+    if (tid == 0) output[row] = (cols > 1) ? (float)(s_sq[0] / (double)(cols - 1)) : 0.0f;
 }'''
 _reg("var", kernel=_VAR_KERNEL,
      inputs=_2d, dims={"d0": 32, "d1": 64}, dispatch=_red_dispatch, atol=1e-3, fuzz_atol=1e8,
@@ -1366,6 +1366,7 @@ _CUMPROD_KERNEL = '''extern "C" __global__ void k(
     // Sklansky inclusive prefix scan matching PyTorch (ScanUtils.cuh).
     // Each thread loads 2 values, then log2(2*blockDim.x) Sklansky steps.
     // block_total carries across blocks for cols > 2*blockDim.x.
+    // NOTE: requires cols <= 2*blockDim.x (currently block=8, cols=16).
     unsigned int row = blockIdx.x;
     if (row >= rows) return;
     const float *ri = input + row * cols;
@@ -1432,7 +1433,7 @@ _TOPK_KERNEL = '''extern "C" __global__ void k(
     if (row >= rows) return;
     const float *ri = input + row * cols;
     float *rv = values + row * topk;
-    unsigned int used[64];  // track by index, not value (NaN == NaN is false)
+    unsigned int used[256];  // track by index, not value (NaN == NaN is false); max k=256
     for (unsigned int i = 0; i < topk; i++) {
         float best = -1e38f; unsigned int best_j = 0;
         for (unsigned int j = 0; j < cols; j++) {

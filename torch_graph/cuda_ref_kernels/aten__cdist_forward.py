@@ -20,19 +20,30 @@ extern "C" __global__ void aten_cdist(
 }
 """
 
-BB, MM, NN, DD = 2, 8, 6, 4
+# Self-registration metadata
+DIMS = {"B": 2, "M": 8, "N": 6, "D": 4}
+ATOL = 1e-4
+
+def make_inputs(dims, seed):
+    from torch_graph.cuda_ref_kernels._registry import _seeded
+    return [_seeded((dims["B"], dims["M"], dims["D"]), seed),
+            _seeded((dims["B"], dims["N"], dims["D"]), seed + 100)]
+
+def reference(inputs):
+    return [torch.ops.aten._cdist_forward.default(*inputs, 2.0, None).flatten()]
 
 def init_once():
-    x1 = torch.randn(BB, MM, DD, device="cuda")
-    x2 = torch.randn(BB, NN, DD, device="cuda")
-    total = BB * MM * NN
-    return {"kernel_source": KERNEL_SRC, "inputs": [x1.contiguous(), x2.contiguous()],
-            "expected": [torch.ops.aten._cdist_forward.default(x1, x2, 2.0, None).flatten()],
-            "outputs": ["float32;n=%d" % total], "grid": ((total + 255) // 256,), "atol": 1e-4}
+    inputs = make_inputs(DIMS, 1)
+    total = DIMS["B"] * DIMS["M"] * DIMS["N"]
+    return {"kernel_source": KERNEL_SRC, "inputs": inputs,
+            "expected": reference(inputs),
+            "outputs": ["float32;n=%d" % total],
+            "grid": ((total + 255) // 256,), "atol": ATOL}
 
 def run(inputs, kernel):
-    total = BB * MM * NN
+    total = DIMS["B"] * DIMS["M"] * DIMS["N"]
     return [kernel(*inputs, params=[
         kernel.in_ptr(0), kernel.in_ptr(1), kernel.out_ptr(0),
-        np.uint32(BB), np.uint32(MM), np.uint32(NN), np.uint32(DD),
+        np.uint32(DIMS["B"]), np.uint32(DIMS["M"]),
+        np.uint32(DIMS["N"]), np.uint32(DIMS["D"]),
     ])]

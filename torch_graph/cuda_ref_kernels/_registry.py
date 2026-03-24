@@ -1913,8 +1913,7 @@ for _name, _aten_fn in [
         torch.zeros(8,32,device="cuda"), 1, torch.randint(0,32,(8,16),device="cuda"), inp[0][:128].reshape(8,16)).flatten()]),
     ("scatter_reduce", lambda inp: [torch.ops.aten.scatter_reduce.two(
         torch.zeros(8,32,device="cuda"), 1, torch.randint(0,32,(8,16),device="cuda"), inp[0][:128].reshape(8,16), "sum").flatten()]),
-    ("_cdist_forward", lambda inp: [torch.ops.aten._cdist_forward.default(
-        inp[0][:64].reshape(2,8,4), inp[0][:48].reshape(2,6,4), 2.0, None).flatten()]),
+    # _cdist_forward: self-registers from aten__cdist_forward.py
     ("_pdist_forward", lambda inp: [torch.ops.aten._pdist_forward.default(inp[0][:32].reshape(8,4), 2.0).flatten()]),
     ("_embedding_bag", lambda inp: [torch.ops.aten._embedding_bag.default(
         inp[0][:3200].reshape(100,32), torch.randint(0,100,(16,),device="cuda"),
@@ -2120,9 +2119,7 @@ _FILE_OPS = {
     "_adaptive_avg_pool3d": {"dims": {"N": 1, "C": 2, "D": 4, "H": 4, "W": 4},
         "inputs": lambda d, s: [_seeded((d["N"],d["C"],d["D"],d["H"],d["W"]), s)],
         "aten": lambda inp: [torch.ops.aten._adaptive_avg_pool3d.default(inp[0], [2,2,2]).flatten()]},
-    "_cdist_forward": {"dims": {"B": 2, "M": 8, "N": 6, "D": 4},
-        "inputs": lambda d, s: [_seeded((d["B"],d["M"],d["D"]), s), _seeded((d["B"],d["N"],d["D"]), s+100)],
-        "aten": lambda inp: [torch.ops.aten._cdist_forward.default(*inp, 2.0, None).flatten()]},
+    # _cdist_forward: self-registers from aten__cdist_forward.py
     "_embedding_bag": {"dims": {"V": 100, "D": 32, "I": 16, "B": 4},
         "inputs": lambda d, s: [_seeded((d["V"],d["D"]), s), torch.randint(0,d["V"],(d["I"],),device="cuda"),
                                  torch.tensor([0,4,8,12][:d["B"]], device="cuda")],
